@@ -10,6 +10,7 @@ export MOCK_ROOT="${TEST_ROOT}/mock"
 export HOME="${TEST_ROOT}/home"
 export COLIBRI_DOWNLOAD_STATE_DIR="${TEST_ROOT}/state"
 export COLIBRI_MODELS_DIR="${TEST_ROOT}/models"
+export COLIBRI_HF_ENV_FILE="${HOME}/.config/colibri-setup/.env"
 
 cleanup() {
     local pid_file pid
