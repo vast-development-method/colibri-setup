@@ -23,6 +23,7 @@ HF_BIN="${HF_BIN:-hf}"
 SCREEN_BIN="${SCREEN_BIN:-screen}"
 MODELS_DIR="${COLIBRI_MODELS_DIR:-${XDG_DATA_HOME:-${HOME}/.local/share}/colibri/models}"
 STATE_DIR="${COLIBRI_DOWNLOAD_STATE_DIR:-${XDG_STATE_HOME:-${HOME}/.local/state}/colibri/downloads}"
+HF_ENV_FILE="${COLIBRI_HF_ENV_FILE:-${XDG_CONFIG_HOME:-${HOME}/.config}/colibri-setup/.env}"
 
 die() {
     printf 'Error: %s\n' "$*" >&2
@@ -195,36 +196,84 @@ validate_token_file() {
         die "Token file must have mode 0600 (run: chmod 600 '${token_file}')."
 }
 
+validate_token_value() {
+    local token="$1"
+    [[ "$token" =~ ^hf_[A-Za-z0-9]+$ ]] ||
+        die "HF_TOKEN must be a Hugging Face user token beginning with 'hf_'."
+}
+
+load_token_file() {
+    local token_file="$1"
+    local -a token_lines=()
+    local token_value
+
+    validate_token_file "$token_file"
+    mapfile -t token_lines <"$token_file"
+    ((${#token_lines[@]} == 1)) ||
+        die "Token file must contain exactly one value or HF_TOKEN assignment."
+    token_value="${token_lines[0]}"
+    if [[ "$token_value" == HF_TOKEN=* ]]; then
+        token_value="${token_value#HF_TOKEN=}"
+    fi
+    validate_token_value "$token_value"
+    HF_TOKEN="$token_value"
+    export HF_TOKEN
+    token_value=''
+    unset token_value
+}
+
+write_default_token() {
+    local token="$1"
+    local config_dir
+    local temporary_file
+
+    validate_token_value "$token"
+    config_dir="$(dirname "$HF_ENV_FILE")"
+    umask 077
+    mkdir -p -- "$config_dir"
+    chmod 0700 -- "$config_dir"
+    temporary_file="$(mktemp "${config_dir}/.env.tmp.XXXXXX")"
+    printf 'HF_TOKEN=%s\n' "$token" >"$temporary_file"
+    chmod 0600 "$temporary_file"
+    mv -f -- "$temporary_file" "$HF_ENV_FILE"
+}
+
 prepare_token() {
     local token_file="$1"
     local prompt_for_token="$2"
     local entered_token=''
 
     if [[ -n "${HF_TOKEN:-}" ]]; then
+        validate_token_value "$HF_TOKEN"
         export HF_TOKEN
         return 0
     fi
 
     if [[ -n "$token_file" ]]; then
-        validate_token_file "$token_file"
+        load_token_file "$token_file"
+        return 0
+    fi
+
+    if [[ -e "$HF_ENV_FILE" ]]; then
+        load_token_file "$HF_ENV_FILE"
         return 0
     fi
 
     if ((prompt_for_token == 1)) && [[ -t 0 ]]; then
-        printf '\nA Hugging Face token is optional but helps avoid anonymous rate limits.\n'
+        printf '\nA Hugging Face token is required for managed Hub access.\n'
         printf 'Create a read token at: https://huggingface.co/settings/tokens\n'
-        IFS= read -r -s -p 'HF token (leave empty to continue anonymously): ' entered_token
+        IFS= read -r -s -p 'HF_TOKEN: ' entered_token
         printf '\n'
-        if [[ -n "$entered_token" ]]; then
-            HF_TOKEN="$entered_token"
-            export HF_TOKEN
-        else
-            warn "Continuing without a Hugging Face token; downloads may be throttled."
-        fi
+        [[ -n "$entered_token" ]] || die "HF_TOKEN was empty."
+        validate_token_value "$entered_token"
+        HF_TOKEN="$entered_token"
+        export HF_TOKEN
+        write_default_token "$HF_TOKEN"
+        note "HF_TOKEN saved in ${HF_ENV_FILE} and exported for Hugging Face operations."
         entered_token=''
         unset entered_token
     else
-        warn "No Hugging Face token supplied; downloads may be throttled."
+        die "HF_TOKEN is required. Configure ${HF_ENV_FILE}, export it, or provide a mode-0600 --token-file."
     fi
 }
 
@@ -715,12 +764,7 @@ worker_command() {
     log_file="$(state_get "$state_file" log_file)"
     attempt_log="${log_file}.attempt"
 
-    if [[ -n "$token_file" ]]; then
-        validate_token_file "$token_file"
-        IFS= read -r HF_TOKEN < "$token_file" || true
-        [[ -n "${HF_TOKEN:-}" ]] || die "Token file is empty: ${token_file}"
-        export HF_TOKEN
-    fi
+    prepare_token "$token_file" 0
 
     mkdir -p -- "$destination"
     chmod 700 "$(dirname "$log_file")" 2>/dev/null || true
@@ -991,8 +1035,10 @@ Options:
   --no-token-prompt        Do not prompt when HF_TOKEN is absent
   --yes, -y                Confirm the download non-interactively
 
-HF_TOKEN may be inherited from the environment. Its value is never written to
-arguments, logs, or job state.
+HF_TOKEN is required. It is loaded automatically from ${HF_ENV_FILE}, may be
+inherited from the environment, or may be supplied through --token-file. Its
+value is exported to the hf subprocess and is never written to arguments,
+logs, or job state.
 EOF
 }
 
