@@ -1,0 +1,15 @@
+# Local editor and test artifacts
+*.log
+*.tmp
+.coverage
+
+# Python and Node artifacts if local tooling is used
+__pycache__/
+*.py[cod]
+node_modules/
+
+# Runtime secrets and state must never be committed
+*.token
+*.secret
+colibri.env
+.env
