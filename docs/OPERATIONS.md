@@ -155,6 +155,32 @@ scripts/download_model.sh resume JOB
 Use `./colibri.sh model download` when possible because it validates the
 destination and manages the detached session.
 
+### Verify an existing model
+
+Run a complete repository checksum verification after a download, after
+moving the model, or whenever storage integrity is in doubt:
+
+```bash
+./colibri.sh model verify
+```
+
+This invokes Hugging Face's native `hf cache verify` against the configured
+repository and model directory. Missing repository files and checksum
+mismatches return a non-zero exit status. The operation is read-only and does
+not download, repair, or delete anything. Because it reads the complete model,
+the approximately 372 GB default model may take several minutes to verify on
+NVMe storage.
+
+To verify a different repository and local directory without changing the
+deployment configuration:
+
+```bash
+./colibri.sh model verify OWNER/REPOSITORY /absolute/model/directory
+```
+
+Extra local files are warnings only. This is intentional because Colibri
+stores `.coli_usage`, KV data, and other runtime sidecars beside the model.
+
 ## Primary model and dual-NVMe mirror
 
 The primary directory is authoritative and writable. Colibri stores its
