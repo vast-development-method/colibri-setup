@@ -225,6 +225,7 @@ Core commands:
 
 Model and storage:
   model download [REPO] [DEST] [options]
+  model verify [REPO] [DEST]
   model status [JOB]
   model attach [JOB]
   model cancel [JOB]
@@ -812,16 +813,19 @@ install_dependencies() {
 }
 
 ensure_hf_cli() {
-    if [[ -x "${HF_VENV_DIR}/bin/hf" ]]; then
+    if [[ -x "${HF_VENV_DIR}/bin/hf" ]] &&
+        "${HF_VENV_DIR}/bin/hf" cache verify --help >/dev/null 2>&1; then
         return 0
     fi
 
     require_command python3
-    info "Installing Hugging Face CLI in an isolated virtual environment"
+    info "Installing/upgrading Hugging Face CLI in an isolated virtual environment"
     python3 -m venv "${HF_VENV_DIR}"
     "${HF_VENV_DIR}/bin/python" -m pip install --upgrade pip huggingface_hub
     [[ -x "${HF_VENV_DIR}/bin/hf" ]] ||
         die "Hugging Face CLI was not installed successfully."
+    "${HF_VENV_DIR}/bin/hf" cache verify --help >/dev/null 2>&1 ||
+        die "The installed Hugging Face CLI does not provide 'hf cache verify'."
 }
 
 validate_source_checkout() {
@@ -1775,6 +1779,33 @@ command_model() {
                 HF_PYTHON="${HF_VENV_DIR}/bin/python" \
                 "${DOWNLOAD_SCRIPT}" start "${repo}" "${destination}" "$@"
             ;;
+        verify)
+            load_config
+            ensure_hf_cli
+            (($# <= 2)) ||
+                die "Usage: ./colibri.sh model verify [MODEL_REPOSITORY] [MODEL_DIRECTORY]"
+            local repo="${1:-${MODEL_REPO}}"
+            local destination="${2:-${MODEL_DIR}}"
+            [[ "${repo}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] ||
+                die "Invalid Hugging Face repository id: ${repo}"
+            destination="$(canonicalize_managed_path "${destination}")"
+            validate_safe_path "${destination}" "Model directory"
+            [[ -d "${destination}" ]] ||
+                die "Model directory does not exist: ${destination}"
+            [[ ! -L "${destination}" ]] ||
+                die "Model directory must not be a symlink: ${destination}"
+
+            info "Verifying model files against Hugging Face checksums"
+            printf 'Repository: %s\n' "${repo}"
+            printf 'Directory:  %s\n' "${destination}"
+            if ! HF_HUB_DISABLE_TELEMETRY=1 \
+                "${HF_VENV_DIR}/bin/hf" cache verify "${repo}" \
+                    --local-dir "${destination}" \
+                    --fail-on-missing-files; then
+                die "Model verification failed. Review the missing-file or checksum details above."
+            fi
+            info "Model verification passed: every repository file is present and its checksum matches."
+            ;;
         status)
             [[ -x "${DOWNLOAD_SCRIPT}" ]] || die "Download helper is missing."
             "${DOWNLOAD_SCRIPT}" status "$@"
@@ -1833,7 +1864,7 @@ command_model() {
             [[ -z "${previous}" ]] || printf 'Preserved mirror: %s\n' "${previous}"
             ;;
         *)
-            die "Usage: ./colibri.sh model download|status|attach|cancel|mirror|mirror-status|mirror-attach|enable-mirror|disable-mirror"
+            die "Usage: ./colibri.sh model download|verify|status|attach|cancel|mirror|mirror-status|mirror-attach|enable-mirror|disable-mirror"
             ;;
     esac
 }
