@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shell:
+    name: Shell checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install ShellCheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes shellcheck
+
+      - name: Check Bash syntax
+        shell: bash
+        run: |
+          mapfile -d '' scripts < <(
+            find . -type f -name '*.sh' -print0
+          )
+          ((${#scripts[@]} > 0))
+          for script in "${scripts[@]}"; do
+            bash -n "${script}"
+          done
+
+      - name: Run ShellCheck
+        shell: bash
+        run: |
+          mapfile -d '' scripts < <(
+            find . -type f -name '*.sh' -print0
+          )
+          shellcheck --severity=warning "${scripts[@]}"
+
+      - name: Check repository privacy
+        run: tests/privacy_check.sh
+
+      - name: Run safe smoke checks
+        run: tests/smoke.sh
+
+      - name: Test UI asset modes
+        run: tests/test_ui_assets.sh
+
+      - name: Test staged source activation and rollback
+        run: tests/test_staged_source.sh
+
+      - name: Test detached download manager with fakes
+        run: tests/test_download_model.sh
+
+      - name: Test mirror verification with fixtures
+        run: tests/test_mirror_model.sh
