@@ -27,6 +27,8 @@ apply_ui_asset_mode
 
 mkdir -p -- "${SOURCE_DIR}/web/dist"
 printf 'fixture\n' >"${SOURCE_DIR}/web/dist/index.html"
+# The sourced helper consumes this cross-file global.
+# shellcheck disable=SC2034
 UI_MODE="open-webui"
 apply_ui_asset_mode
 [[ ! -e "${SOURCE_DIR}/web/dist" ]]

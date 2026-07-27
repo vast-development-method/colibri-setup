@@ -165,7 +165,8 @@ rollback_activated_source() {
             return 1
         fi
     elif [[ -e "${SOURCE_DIR}" ]]; then
-        local failed_source="${SOURCE_DIR}.failed-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+        local failed_source
+        failed_source="${SOURCE_DIR}.failed-$(date -u +%Y%m%dT%H%M%SZ)-$$"
         mv -T -- "${SOURCE_DIR}" "${failed_source}"
         warn "Failed first-install candidate retained at ${failed_source}."
     fi
@@ -992,7 +993,8 @@ activate_staged_source() {
         die "Refusing to activate source while ${SERVICE_NAME} is running."
     fi
 
-    local rollback_path="${SOURCE_DIR}.previous-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+    local rollback_path
+    rollback_path="${SOURCE_DIR}.previous-$(date -u +%Y%m%dT%H%M%SZ)-$$"
     if [[ -n "${STAGED_SOURCE_LIVE_COMMIT}" ]]; then
         validate_source_checkout
         [[ "$(git -C "${SOURCE_DIR}" rev-parse HEAD)" == "${STAGED_SOURCE_LIVE_COMMIT}" ]] ||

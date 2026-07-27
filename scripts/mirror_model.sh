@@ -247,6 +247,7 @@ worker() {
     local full_verify=$4
 
     local completed="0"
+    local exit_code="0"
     trap 'exit 130' INT TERM
     trap 'exit_code=$?; if [[ "${completed}" != "1" ]]; then write_state "${state_file}" failed "Mirror worker failed with exit ${exit_code}"; fi; exit "${exit_code}"' EXIT
     write_state "${state_file}" running "Copying model"
