@@ -108,28 +108,31 @@ The helper:
 
 1. checks or installs the `hf` CLI and GNU Screen;
 2. asks for the Hugging Face model repository and destination;
-3. asks whether a Hugging Face token should be used;
+3. requires and exports `HF_TOKEN` from the private user `.env` file;
 4. launches a resumable download in a detached Screen session;
 5. prints the session name and exact commands used to inspect it.
 
-A read-only Hugging Face token is recommended. It raises authenticated rate
-limits and is required for gated or private repositories for which the
-account has access. Create one at
+A read-only Hugging Face token is required for every managed remote `hf`
+operation. It raises authenticated rate limits and grants access to gated or
+private repositories for which the account has permission. Create one at
 [Hugging Face access tokens](https://huggingface.co/settings/tokens). See the
 [Hugging Face authentication guide](https://huggingface.co/docs/huggingface_hub/en/quick-start#authentication)
-for token scope and login behavior.
+for token scope.
 
-The token can be supplied to the detached process through `HF_TOKEN`. Do not
-put it directly in the script or a repository file. A session-scoped example
-is:
+Store it as the `HF_TOKEN` variable in the toolkit's private user `.env` file:
 
 ```bash
-read -rsp "Hugging Face token (input hidden): " HF_TOKEN
-printf '\n'
-export HF_TOKEN
+./colibri.sh hf-token set
+./colibri.sh hf-token status
 ./colibri.sh model download
-unset HF_TOKEN
 ```
+
+The file is `~/.config/colibri-setup/.env`, contains only the exact
+`HF_TOKEN=...` assignment, and is created with mode `0600`. It is parsed
+strictly rather than sourced. The variable is exported only to Hugging Face
+subprocesses and is inherited by the detached Screen worker. Interactive
+commands prompt once and save it if the file is absent; non-interactive
+commands stop instead of falling back to anonymous Hub access.
 
 To inspect downloads:
 
@@ -169,7 +172,8 @@ repository and model directory. Missing repository files and checksum
 mismatches return a non-zero exit status. The operation is read-only and does
 not download, repair, or delete anything. Because it reads the complete model,
 the approximately 372 GB default model may take several minutes to verify on
-NVMe storage.
+NVMe storage. The manager prints an immediate start message and an elapsed-time
+heartbeat every 10 seconds until Hugging Face returns its result.
 
 To verify a different repository and local directory without changing the
 deployment configuration:
@@ -179,7 +183,39 @@ deployment configuration:
 ```
 
 Extra local files are warnings only. This is intentional because Colibri
-stores `.coli_usage`, KV data, and other runtime sidecars beside the model.
+stores KV data and other runtime sidecars beside the model. The default remote
+repository also contains a seed `.coli_usage` file, but Colibri updates that
+learning profile after each turn. A later `.coli_usage` checksum difference is
+therefore reported as an expected mutable-state warning and is not selected
+for repair. If `.coli_usage` is absent entirely, repair may restore the remote
+seed file.
+
+### Repair only failed model files
+
+When verification reports missing files or checksum mismatches, run:
+
+```bash
+./colibri.sh model repair
+```
+
+The command:
+
+1. performs the same complete checksum scan with visible heartbeat output;
+2. extracts only paths listed by Hugging Face under checksum failures or
+   missing remote files;
+3. prints those paths and asks for confirmation;
+4. downloads only those paths with `--force-download`;
+5. performs a second complete verification.
+
+Existing valid shards are not downloaded again. For unattended use after
+reviewing the printed plan:
+
+```bash
+./colibri.sh model repair --yes
+```
+
+Stop Colibri before repair. The command refuses to replace model files while
+the managed service is active.
 
 ## Primary model and dual-NVMe mirror
 

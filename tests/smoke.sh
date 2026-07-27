@@ -66,6 +66,11 @@ grep -Fq 'model verify [REPO] [DEST]' <<<"${help_output}" || {
     exit 1
 }
 
+grep -Fq 'model repair [REPO] [DEST] [--yes]' <<<"${help_output}" || {
+    printf 'smoke: help does not document selective model repair\n' >&2
+    exit 1
+}
+
 if grep -nE \
     '\brm[[:space:]].*(\$\{?MODEL_DIR|\$\{?MIRROR_DIR)' \
     colibri.sh

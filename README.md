@@ -92,23 +92,32 @@ service, generates an API key, and—if the model is absent—offers to start th
 approximately 372 GB download in GNU Screen. The service remains disabled
 until a complete model is available.
 
-A read-only Hugging Face token is recommended because authenticated downloads
-receive better rate limits and gated models require account access. Create a
+A read-only Hugging Face token is required for every managed command that
+contacts the Hugging Face Hub. Authenticated downloads receive better rate
+limits, and gated models require account access. Create a
 token in [Hugging Face settings](https://huggingface.co/settings/tokens).
-During a guided download, the token prompt is hidden and may be left empty for
-a public anonymous download.
-
-To store the token in Hugging Face's official user credential store before
-downloading:
+Store it once in the toolkit's private user environment file:
 
 ```bash
 ./colibri.sh hf-token set
 ./colibri.sh hf-token status
+```
+
+This writes exactly one `HF_TOKEN=...` assignment to
+`~/.config/colibri-setup/.env` with mode `0600`. The file is parsed as data,
+not sourced as shell code. Before any remote `hf` CLI operation, the toolkit
+loads the value and exports `HF_TOKEN` to that subprocess, including detached
+GNU Screen downloads. If it is absent, an interactive command asks once and
+saves it; non-interactive commands stop with a setup instruction.
+
+Then start the managed download:
+
+```bash
 ./colibri.sh model download
 ```
 
-Do not put a token in this repository, a command-line argument, or a
-world-readable shell profile.
+Anonymous managed Hub access is intentionally disabled. Do not put a token in
+this repository, a command-line argument, or a world-readable shell profile.
 
 Monitor or attach to the detached download:
 
@@ -134,7 +143,23 @@ When the download has completed:
 repository. It fails if a repository file is missing or if any checksum does
 not match. It does not download, replace, or delete model files. Colibri's
 runtime sidecars may be reported as extra local files, but they do not cause
-verification to fail.
+verification to fail. A checksum difference for `.coli_usage` is also treated
+as expected because Colibri updates that learning profile during normal use;
+it is never overwritten as a corrupted weight. A missing remote `.coli_usage`
+file can still be restored. While the complete model is being read, an
+elapsed-time heartbeat is printed every 10 seconds so the command does not
+appear hung.
+
+If verification identifies missing or checksum-mismatched repository files,
+repair only those files:
+
+```bash
+./colibri.sh model repair
+```
+
+The repair command prints the exact file list, asks for confirmation, invokes
+`hf download` with only those paths and `--force-download`, and then verifies
+the complete model again. Correct model shards are not downloaded again.
 
 In another terminal, verify discovery and run a tiny completion:
 
@@ -341,6 +366,8 @@ mirrors even though this toolkit's managed copy produces a complete mirror.
 
 # Credentials
 ./colibri.sh hf-token status
+./colibri.sh hf-token set
+./colibri.sh hf-token remove
 ./colibri.sh api-key show
 ./colibri.sh api-key rotate
 

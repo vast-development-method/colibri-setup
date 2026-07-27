@@ -46,19 +46,20 @@ replace Open WebUI user authentication, role controls, or TLS.
 
 ## Secret handling
 
-The setup may pass `HF_TOKEN` to a detached Screen download. Environment
-variables can be visible to sufficiently privileged local users. On a
-multi-user host, treat Screen sessions and the generated configuration as
-administrator-only resources.
+The setup requires `HF_TOKEN` for managed Hugging Face Hub operations. It
+stores the value in `~/.config/colibri-setup/.env` with mode `0600` and
+exports it only to Hugging Face subprocesses. The file is parsed as one strict
+assignment and is never sourced as executable shell code. The detached Screen
+download inherits the variable. Environment variables remain visible to
+sufficiently privileged local users, so treat Screen sessions as
+administrator-only resources on a multi-user host.
 
-Prefer hidden input:
+Configure or remove the value with:
 
 ```bash
-read -rsp "Hugging Face token (input hidden): " HF_TOKEN
-printf '\n'
-export HF_TOKEN
-./colibri.sh model download
-unset HF_TOKEN
+./colibri.sh hf-token set
+./colibri.sh hf-token status
+./colibri.sh hf-token remove
 ```
 
 Avoid:

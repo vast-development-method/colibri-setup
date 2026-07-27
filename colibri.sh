@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 
 readonly PROGRAM_NAME="colibri.sh"
-readonly PROGRAM_VERSION="0.1.0"
+readonly PROGRAM_VERSION="0.1.1"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly SCRIPT_DIR
 readonly UPSTREAM_URL="https://github.com/JustVugg/colibri.git"
@@ -21,6 +21,8 @@ readonly SYSTEM_LIBEXEC_DIR="/usr/local/libexec/colibri-setup"
 readonly INSTALLED_WAIT_SCRIPT="${SYSTEM_LIBEXEC_DIR}/wait_for_address.sh"
 readonly USER_STATE_DIR="${XDG_STATE_HOME:-${HOME}/.local/state}/colibri-setup"
 readonly USER_DATA_DIR="${XDG_DATA_HOME:-${HOME}/.local/share}/colibri-setup"
+readonly USER_CONFIG_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/colibri-setup"
+readonly HF_ENV_FILE="${USER_CONFIG_DIR}/.env"
 readonly DEFAULT_SOURCE_DIR="${USER_DATA_DIR}/upstream"
 readonly DEFAULT_MODEL_DIR="${HOME}/models/glm52-colibri-gs64"
 readonly HF_VENV_DIR="${USER_DATA_DIR}/hf-venv"
@@ -123,33 +125,29 @@ discard_staged_source() {
 atomic_exchange_paths() {
     local first=$1
     local second=$2
-    require_command python3
-    COLIBRI_EXCHANGE_FIRST="${first}" \
-        COLIBRI_EXCHANGE_SECOND="${second}" \
-        python3 - <<'PY'
-import ctypes
-import os
+    local first_parent
+    local temporary
 
-first = os.fsencode(os.environ["COLIBRI_EXCHANGE_FIRST"])
-second = os.fsencode(os.environ["COLIBRI_EXCHANGE_SECOND"])
-libc = ctypes.CDLL(None, use_errno=True)
-renameat2 = getattr(libc, "renameat2", None)
-if renameat2 is None:
-    raise SystemExit("This system does not expose renameat2; atomic activation is unavailable.")
-renameat2.argtypes = [
-    ctypes.c_int,
-    ctypes.c_char_p,
-    ctypes.c_int,
-    ctypes.c_char_p,
-    ctypes.c_uint,
-]
-renameat2.restype = ctypes.c_int
-at_fdcwd = -100
-rename_exchange = 2
-if renameat2(at_fdcwd, first, at_fdcwd, second, rename_exchange) != 0:
-    errno = ctypes.get_errno()
-    raise OSError(errno, os.strerror(errno))
-PY
+    [[ -e "${first}" && -e "${second}" ]] ||
+        die "Both source paths must exist before they can be exchanged."
+    [[ "$(stat -c '%d' "${first}")" == "$(stat -c '%d' "${second}")" ]] ||
+        die "Source exchange requires both paths on the same filesystem."
+
+    first_parent="$(dirname -- "${first}")"
+    temporary="${first_parent}/.$(basename -- "${first}").exchange.$$"
+    [[ ! -e "${temporary}" ]] ||
+        die "Temporary source exchange path already exists: ${temporary}"
+
+    mv -T -- "${first}" "${temporary}"
+    if ! mv -T -- "${second}" "${first}"; then
+        mv -T -- "${temporary}" "${first}"
+        return 1
+    fi
+    if ! mv -T -- "${temporary}" "${second}"; then
+        mv -T -- "${first}" "${second}" || true
+        mv -T -- "${temporary}" "${first}" || true
+        return 1
+    fi
 }
 
 rollback_activated_source() {
@@ -226,8 +224,10 @@ Core commands:
 Model and storage:
   model download [REPO] [DEST] [options]
   model verify [REPO] [DEST]
+  model repair [REPO] [DEST] [--yes]
   model status [JOB]
   model attach [JOB]
+  model resume [JOB]
   model cancel [JOB]
   model mirror <DEST> [options]
   model mirror-status [JOB]
@@ -247,6 +247,7 @@ Profiles and interfaces:
 
 Credentials and upstream CLI:
   hf-token set|status|remove
+                           Manage HF_TOKEN in the private user .env file
   api-key show|rotate
   cli [Colibri arguments ...]  Run the bundled upstream `coli` with managed config
 
@@ -296,8 +297,85 @@ require_command() {
 
 ensure_state_dirs() {
     umask 077
-    mkdir -p -- "${USER_STATE_DIR}" "${USER_DATA_DIR}"
-    chmod 0700 -- "${USER_STATE_DIR}" "${USER_DATA_DIR}"
+    mkdir -p -- "${USER_STATE_DIR}" "${USER_DATA_DIR}" "${USER_CONFIG_DIR}"
+    chmod 0700 -- "${USER_STATE_DIR}" "${USER_DATA_DIR}" "${USER_CONFIG_DIR}"
+}
+
+validate_hf_token_value() {
+    local token=$1
+    [[ "${token}" =~ ^hf_[A-Za-z0-9]+$ ]] ||
+        die "HF_TOKEN must be a Hugging Face user token beginning with 'hf_'."
+}
+
+validate_hf_env_file() {
+    local mode
+    local owner
+
+    [[ -f "${HF_ENV_FILE}" ]] ||
+        die "HF_TOKEN environment file does not exist: ${HF_ENV_FILE}"
+    [[ ! -L "${HF_ENV_FILE}" ]] ||
+        die "HF_TOKEN environment file must not be a symbolic link: ${HF_ENV_FILE}"
+    mode="$(stat -c '%a' "${HF_ENV_FILE}")"
+    [[ "${mode}" == "600" ]] ||
+        die "HF_TOKEN environment file must have mode 0600: ${HF_ENV_FILE}"
+    owner="$(stat -c '%u' "${HF_ENV_FILE}")"
+    [[ "${owner}" == "$(id -u)" ]] ||
+        die "HF_TOKEN environment file must be owned by the deployment user: ${HF_ENV_FILE}"
+}
+
+load_hf_token() {
+    if [[ -n "${HF_TOKEN:-}" ]]; then
+        validate_hf_token_value "${HF_TOKEN}"
+        export HF_TOKEN
+        return 0
+    fi
+    [[ -e "${HF_ENV_FILE}" ]] || return 1
+
+    validate_hf_env_file
+    local -a environment_lines=()
+    mapfile -t environment_lines <"${HF_ENV_FILE}"
+    ((${#environment_lines[@]} == 1)) ||
+        die "HF_TOKEN environment file must contain exactly one assignment."
+    local line=${environment_lines[0]}
+    [[ "${line}" == HF_TOKEN=* ]] ||
+        die "HF_TOKEN environment file must contain an HF_TOKEN assignment."
+
+    HF_TOKEN="${line#HF_TOKEN=}"
+    validate_hf_token_value "${HF_TOKEN}"
+    export HF_TOKEN
+}
+
+write_hf_token() {
+    local token=$1
+    local temporary_file
+
+    validate_hf_token_value "${token}"
+    ensure_state_dirs
+    umask 077
+    temporary_file="$(mktemp "${USER_CONFIG_DIR}/.env.tmp.XXXXXX")"
+    printf 'HF_TOKEN=%s\n' "${token}" >"${temporary_file}"
+    chmod 0600 "${temporary_file}"
+    mv -f -- "${temporary_file}" "${HF_ENV_FILE}"
+}
+
+ensure_hf_token() {
+    if load_hf_token; then
+        return 0
+    fi
+    [[ -t 0 ]] ||
+        die "HF_TOKEN is required. Configure it first with: ./colibri.sh hf-token set"
+
+    local token=""
+    printf '\nA Hugging Face read token is required for managed Hub access.\n'
+    printf 'Create one at: https://huggingface.co/settings/tokens\n'
+    IFS= read -r -s -p 'HF_TOKEN: ' token
+    printf '\n'
+    [[ -n "${token}" ]] || die "HF_TOKEN was empty."
+    write_hf_token "${token}"
+    token=""
+    unset token
+    load_hf_token
+    info "HF_TOKEN saved and exported for Hugging Face operations."
 }
 
 acquire_lock() {
@@ -804,6 +882,7 @@ install_dependencies() {
         curl \
         git \
         iproute2 \
+        jq \
         openssl \
         python3 \
         python3-venv \
@@ -826,6 +905,221 @@ ensure_hf_cli() {
         die "Hugging Face CLI was not installed successfully."
     "${HF_VENV_DIR}/bin/hf" cache verify --help >/dev/null 2>&1 ||
         die "The installed Hugging Face CLI does not provide 'hf cache verify'."
+}
+
+format_elapsed_time() {
+    local total_seconds=$1
+    local output_variable=$2
+    printf -v "${output_variable}" '%02d:%02d:%02d' \
+        "$((total_seconds / 3600))" \
+        "$(((total_seconds % 3600) / 60))" \
+        "$((total_seconds % 60))"
+}
+
+heartbeat_worker() {
+    local label=$1
+    local command_pid=$2
+    local started_at=$3
+    local interval=$4
+    local elapsed
+
+    while sleep "${interval}"; do
+        kill -0 "${command_pid}" 2>/dev/null || return 0
+        format_elapsed_time "$((SECONDS - started_at))" elapsed
+        printf '... %s is still running (%s elapsed)\n' \
+            "${label}" \
+            "${elapsed}" >&2
+    done
+}
+
+run_with_heartbeat() {
+    local label=$1
+    local output_file=$2
+    shift 2
+
+    local interval=${COLIBRI_HEARTBEAT_INTERVAL_SECONDS:-10}
+    [[ "${interval}" =~ ^[1-9][0-9]*$ ]] || interval=10
+
+    local started_at=${SECONDS}
+    local command_pid
+    local heartbeat_pid=""
+    local status
+    local elapsed
+
+    : >"${output_file}"
+    "$@" >"${output_file}" 2>&1 &
+    command_pid=$!
+
+    if [[ -t 2 || "${COLIBRI_FORCE_HEARTBEAT:-0}" == "1" ]]; then
+        printf '%s started; checksum progress will be reported every %s seconds.\n' \
+            "${label}" "${interval}" >&2
+        heartbeat_worker "${label}" "${command_pid}" "${started_at}" "${interval}" &
+        heartbeat_pid=$!
+    fi
+
+    if wait "${command_pid}"; then
+        status=0
+    else
+        status=$?
+    fi
+
+    if [[ -n "${heartbeat_pid}" ]]; then
+        kill "${heartbeat_pid}" 2>/dev/null || true
+        wait "${heartbeat_pid}" 2>/dev/null || true
+        format_elapsed_time "$((SECONDS - started_at))" elapsed
+        printf '%s finished after %s.\n' \
+            "${label}" \
+            "${elapsed}" >&2
+    fi
+
+    return "${status}"
+}
+
+validate_model_repository() {
+    local repository=$1
+    [[ "${repository}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] ||
+        die "Invalid Hugging Face repository id: ${repository}"
+}
+
+resolve_existing_model_directory() {
+    local destination=$1
+    destination="$(canonicalize_managed_path "${destination}")"
+    validate_safe_path "${destination}" "Model directory"
+    [[ -d "${destination}" ]] ||
+        die "Model directory does not exist: ${destination}"
+    [[ ! -L "${destination}" ]] ||
+        die "Model directory must not be a symlink: ${destination}"
+    printf '%s\n' "${destination}"
+}
+
+extract_model_repair_targets() {
+    local verification_output=$1
+    awk '
+        index($0, "Checksum verification failed for the following file(s):") {
+            section = "mismatch"
+            next
+        }
+        index($0, "Missing files (present remotely, absent locally):") {
+            section = "missing"
+            next
+        }
+        section == "mismatch" && /^  - / {
+            target = substr($0, 5)
+            sub(/: expected .*/, "", target)
+            if (target != ".coli_usage") {
+                print target
+            }
+            next
+        }
+        section == "missing" && /^  - / {
+            print substr($0, 5)
+            next
+        }
+        /^[^[:space:]]/ {
+            section = ""
+        }
+    ' "${verification_output}" |
+        LC_ALL=C sort -u
+}
+
+has_only_mutable_usage_mismatch() {
+    local verification_output=$1
+    awk '
+        index($0, "Checksum verification failed for the following file(s):") {
+            section = "mismatch"
+            next
+        }
+        index($0, "Missing files (present remotely, absent locally):") {
+            section = "missing"
+            next
+        }
+        section == "mismatch" && /^  - / {
+            target = substr($0, 5)
+            sub(/: expected .*/, "", target)
+            mismatch_count++
+            if (target != ".coli_usage") {
+                significant_count++
+            }
+            next
+        }
+        section == "missing" && /^  - / {
+            significant_count++
+            next
+        }
+        /^[^[:space:]]/ {
+            section = ""
+        }
+        END {
+            exit !(mismatch_count > 0 && significant_count == 0)
+        }
+    ' "${verification_output}"
+}
+
+run_model_integrity() {
+    local repository=$1
+    local destination=$2
+    local output_file=$3
+    local repair_list=${4:-}
+    local status=0
+
+    [[ -z "${repair_list}" ]] || : >"${repair_list}"
+    if run_with_heartbeat \
+        "Model checksum verification" \
+        "${output_file}" \
+        env HF_HUB_DISABLE_TELEMETRY=1 \
+        "${HF_VENV_DIR}/bin/hf" cache verify "${repository}" \
+            --local-dir "${destination}" \
+            --fail-on-missing-files; then
+        status=0
+    else
+        status=$?
+    fi
+
+    if ((status == 0)); then
+        cat -- "${output_file}"
+    elif has_only_mutable_usage_mismatch "${output_file}"; then
+        grep '^Warning:' "${output_file}" || true
+        warn "Skipping the expected .coli_usage checksum difference; Colibri updates this learning profile during normal use."
+        status=0
+    else
+        cat -- "${output_file}" >&2
+        if [[ -n "${repair_list}" ]]; then
+            extract_model_repair_targets "${output_file}" >"${repair_list}"
+        fi
+    fi
+    return "${status}"
+}
+
+validate_model_repair_target() {
+    local destination=$1
+    local relative_path=$2
+    local current=${destination}
+    local -a path_parts=()
+    local index
+
+    [[ -n "${relative_path}" && "${relative_path}" != /* ]] ||
+        die "Unsafe repair target returned by Hugging Face: ${relative_path}"
+    [[ "${relative_path}" != *$'\n'* &&
+        "${relative_path}" != *$'\r'* &&
+        "${relative_path}" != *$'\t'* ]] ||
+        die "Repair target contains control characters."
+
+    IFS='/' read -r -a path_parts <<<"${relative_path}"
+    ((${#path_parts[@]} > 0)) ||
+        die "Repair target is empty."
+    for index in "${!path_parts[@]}"; do
+        [[ -n "${path_parts[index]}" &&
+            "${path_parts[index]}" != "." &&
+            "${path_parts[index]}" != ".." ]] ||
+            die "Unsafe repair target returned by Hugging Face: ${relative_path}"
+        if ((index + 1 < ${#path_parts[@]})); then
+            current="${current}/${path_parts[index]}"
+            [[ ! -L "${current}" ]] ||
+                die "Repair target traverses a symbolic link: ${current}"
+        fi
+    done
+    [[ ! -L "${destination}/${relative_path}" ]] ||
+        die "Refusing to replace a symbolic link: ${destination}/${relative_path}"
 }
 
 validate_source_checkout() {
@@ -1068,22 +1362,29 @@ model_is_ready() {
     fi
 
     if [[ -r "${MODEL_DIR}/model.safetensors.index.json" ]]; then
-        MODEL_INDEX="${MODEL_DIR}/model.safetensors.index.json" \
-            MODEL_ROOT="${MODEL_DIR}" \
-            python3 - <<'PY' >/dev/null || return 1
-import json
-import os
-from pathlib import Path
-
-root = Path(os.environ["MODEL_ROOT"])
-with open(os.environ["MODEL_INDEX"], "r", encoding="utf-8") as handle:
-    index = json.load(handle)
-files = set(index.get("weight_map", {}).values())
-if not files:
-    raise SystemExit(1)
-missing = [name for name in files if not (root / name).is_file()]
-raise SystemExit(1 if missing else 0)
-PY
+        command -v jq >/dev/null 2>&1 || return 1
+        jq -e '
+            (.weight_map | type == "object") and
+            (.weight_map | length > 0) and
+            ([.weight_map[] | type == "string"] | all)
+        ' "${MODEL_DIR}/model.safetensors.index.json" >/dev/null || return 1
+        local -a indexed_shards=()
+        mapfile -t indexed_shards < <(
+            jq -r '.weight_map[]' "${MODEL_DIR}/model.safetensors.index.json" |
+                LC_ALL=C sort -u
+        )
+        local indexed_shard
+        for indexed_shard in "${indexed_shards[@]}"; do
+            [[ -n "${indexed_shard}" &&
+                "${indexed_shard}" != /* &&
+                "${indexed_shard}" != *$'\t'* &&
+                "${indexed_shard}" != *$'\r'* &&
+                "${indexed_shard}" != *$'\n'* ]] || return 1
+            case "/${indexed_shard}/" in
+                */../* | */./*) return 1 ;;
+            esac
+            [[ -f "${MODEL_DIR}/${indexed_shard}" ]] || return 1
+        done
     fi
     return 0
 }
@@ -1121,41 +1422,58 @@ api_request() {
     local method=$1
     local url=$2
     local payload=${3:-}
-    COLIBRI_REQUEST_METHOD="${method}" \
-        COLIBRI_REQUEST_URL="${url}" \
-        COLIBRI_REQUEST_PAYLOAD="${payload}" \
-        COLIBRI_REQUEST_KEY="${COLI_API_KEY}" \
-        python3 - <<'PY'
-import json
-import os
-import sys
-import urllib.error
-import urllib.request
+    local curl_config
+    local response_file
+    local payload_file=""
+    local status=0
 
-method = os.environ["COLIBRI_REQUEST_METHOD"]
-url = os.environ["COLIBRI_REQUEST_URL"]
-payload = os.environ.get("COLIBRI_REQUEST_PAYLOAD", "")
-headers = {"Authorization": f"Bearer {os.environ['COLIBRI_REQUEST_KEY']}"}
-data = None
-if payload:
-    data = payload.encode("utf-8")
-    headers["Content-Type"] = "application/json"
-request = urllib.request.Request(url, data=data, headers=headers, method=method)
-opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-try:
-    with opener.open(request, timeout=30) as response:
-        body = response.read().decode("utf-8", "replace")
-        try:
-            print(json.dumps(json.loads(body), indent=2, ensure_ascii=False))
-        except json.JSONDecodeError:
-            print(body)
-except urllib.error.HTTPError as error:
-    sys.stderr.write(f"HTTP {error.code}: {error.read().decode('utf-8', 'replace')}\n")
-    raise SystemExit(1)
-except OSError as error:
-    sys.stderr.write(f"Request failed: {error}\n")
-    raise SystemExit(1)
-PY
+    require_command curl
+    require_command jq
+    [[ "${method}" == "GET" || "${method}" == "POST" ]] ||
+        die "Unsupported API request method: ${method}"
+    [[ "${COLI_API_KEY}" =~ ^[A-Fa-f0-9]{64}$ ]] ||
+        die "Configured Colibri API key is invalid."
+
+    umask 077
+    curl_config="$(mktemp)"
+    response_file="$(mktemp)"
+    printf 'header = "Authorization: Bearer %s"\n' \
+        "${COLI_API_KEY}" >"${curl_config}"
+
+    local -a curl_arguments=(
+        --silent
+        --show-error
+        --fail-with-body
+        --noproxy '*'
+        --request "${method}"
+        --url "${url}"
+        --config "${curl_config}"
+        --output "${response_file}"
+    )
+    if [[ -n "${payload}" ]]; then
+        payload_file="$(mktemp)"
+        printf '%s' "${payload}" >"${payload_file}"
+        printf 'header = "Content-Type: application/json"\n' >>"${curl_config}"
+        curl_arguments+=(--data-binary "@${payload_file}")
+    fi
+
+    if curl "${curl_arguments[@]}"; then
+        status=0
+    else
+        status=$?
+        [[ ! -s "${response_file}" ]] || cat -- "${response_file}" >&2
+        rm -f -- "${curl_config}" "${response_file}"
+        [[ -z "${payload_file}" ]] || rm -f -- "${payload_file}"
+        return "${status}"
+    fi
+
+    if jq -e . "${response_file}" >/dev/null 2>&1; then
+        jq . "${response_file}"
+    else
+        cat -- "${response_file}"
+    fi
+    rm -f -- "${curl_config}" "${response_file}"
+    [[ -z "${payload_file}" ]] || rm -f -- "${payload_file}"
 }
 
 port_is_listening() {
@@ -1770,41 +2088,150 @@ command_model() {
         download)
             load_config
             ensure_hf_cli
+            ensure_hf_token
             [[ -x "${DOWNLOAD_SCRIPT}" ]] || die "Download helper is missing: ${DOWNLOAD_SCRIPT}"
             local repo="${1:-${MODEL_REPO}}"
             local destination="${2:-${MODEL_DIR}}"
             if (($# >= 1)); then shift; fi
             if (($# >= 1)); then shift; fi
             HF_BIN="${HF_VENV_DIR}/bin/hf" \
-                HF_PYTHON="${HF_VENV_DIR}/bin/python" \
                 "${DOWNLOAD_SCRIPT}" start "${repo}" "${destination}" "$@"
             ;;
         verify)
             load_config
             ensure_hf_cli
+            ensure_hf_token
             (($# <= 2)) ||
                 die "Usage: ./colibri.sh model verify [MODEL_REPOSITORY] [MODEL_DIRECTORY]"
             local repo="${1:-${MODEL_REPO}}"
             local destination="${2:-${MODEL_DIR}}"
-            [[ "${repo}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] ||
-                die "Invalid Hugging Face repository id: ${repo}"
-            destination="$(canonicalize_managed_path "${destination}")"
-            validate_safe_path "${destination}" "Model directory"
-            [[ -d "${destination}" ]] ||
-                die "Model directory does not exist: ${destination}"
-            [[ ! -L "${destination}" ]] ||
-                die "Model directory must not be a symlink: ${destination}"
+            validate_model_repository "${repo}"
+            destination="$(resolve_existing_model_directory "${destination}")"
 
             info "Verifying model files against Hugging Face checksums"
             printf 'Repository: %s\n' "${repo}"
             printf 'Directory:  %s\n' "${destination}"
-            if ! HF_HUB_DISABLE_TELEMETRY=1 \
-                "${HF_VENV_DIR}/bin/hf" cache verify "${repo}" \
-                    --local-dir "${destination}" \
-                    --fail-on-missing-files; then
+            local verification_output
+            verification_output="$(mktemp)"
+            if ! run_model_integrity \
+                "${repo}" \
+                "${destination}" \
+                "${verification_output}"; then
+                rm -f -- "${verification_output}"
                 die "Model verification failed. Review the missing-file or checksum details above."
             fi
-            info "Model verification passed: every repository file is present and its checksum matches."
+            rm -f -- "${verification_output}"
+            info "Model verification passed: all immutable repository files are present and match."
+            ;;
+        repair)
+            load_config
+            ensure_hf_cli
+            ensure_hf_token
+            local -a repair_positionals=()
+            while (($#)); do
+                case "$1" in
+                    --yes | -y)
+                        AUTO_YES="1"
+                        shift
+                        ;;
+                    --)
+                        shift
+                        while (($#)); do
+                            repair_positionals+=("$1")
+                            shift
+                        done
+                        ;;
+                    -*)
+                        die "Unknown model repair option: $1"
+                        ;;
+                    *)
+                        repair_positionals+=("$1")
+                        shift
+                        ;;
+                esac
+            done
+            ((${#repair_positionals[@]} <= 2)) ||
+                die "Usage: ./colibri.sh model repair [MODEL_REPOSITORY] [MODEL_DIRECTORY] [--yes]"
+
+            local repo="${repair_positionals[0]:-${MODEL_REPO}}"
+            local destination="${repair_positionals[1]:-${MODEL_DIR}}"
+            validate_model_repository "${repo}"
+            destination="$(resolve_existing_model_directory "${destination}")"
+
+            info "Finding missing or checksum-mismatched model files"
+            printf 'Repository: %s\n' "${repo}"
+            printf 'Directory:  %s\n' "${destination}"
+
+            local verification_output
+            local repair_list
+            local verification_status=0
+            verification_output="$(mktemp)"
+            repair_list="$(mktemp)"
+            rm -f -- "${repair_list}"
+
+            if run_model_integrity \
+                "${repo}" \
+                "${destination}" \
+                "${verification_output}" \
+                "${repair_list}"; then
+                rm -f -- "${verification_output}" "${repair_list}"
+                info "No repair is needed; the model already passes verification."
+                return 0
+            else
+                verification_status=$?
+            fi
+            rm -f -- "${verification_output}"
+
+            if ((verification_status != 1)) || [[ ! -f "${repair_list}" ]]; then
+                rm -f -- "${repair_list}"
+                die "Could not build a reliable repair plan; no model files were changed."
+            fi
+
+            local -a repair_files=()
+            mapfile -t repair_files <"${repair_list}"
+            rm -f -- "${repair_list}"
+            ((${#repair_files[@]} > 0)) ||
+                die "Verification failed without identifying a safe repair target."
+
+            printf '\nOnly these %d remote file(s) will be downloaded:\n' \
+                "${#repair_files[@]}"
+            local repair_file
+            for repair_file in "${repair_files[@]}"; do
+                validate_model_repair_target "${destination}" "${repair_file}"
+                printf '  - %s\n' "${repair_file}"
+            done
+
+            if [[ -e "${SERVICE_FILE}" ]] &&
+                command -v systemctl >/dev/null 2>&1 &&
+                systemctl is-active --quiet "${SERVICE_NAME}"; then
+                die "Colibri is running. Stop it with './colibri.sh stop' before replacing model files."
+            fi
+
+            confirm "Download and replace only the listed file(s)?" no ||
+                die "Model repair cancelled."
+
+            info "Downloading only the missing or corrupted files"
+            if ! HF_HUB_DISABLE_TELEMETRY=1 \
+                "${HF_VENV_DIR}/bin/hf" download \
+                    "${repo}" \
+                    "${repair_files[@]}" \
+                    --repo-type model \
+                    --local-dir "${destination}" \
+                    --force-download; then
+                die "Selective model download failed. Re-run the same repair command to resume."
+            fi
+
+            info "Re-verifying the complete model after repair"
+            verification_output="$(mktemp)"
+            if ! run_model_integrity \
+                "${repo}" \
+                "${destination}" \
+                "${verification_output}"; then
+                rm -f -- "${verification_output}"
+                die "Repair downloads completed, but model verification still fails."
+            fi
+            rm -f -- "${verification_output}"
+            info "Model repair passed: all immutable repository files are present and match."
             ;;
         status)
             [[ -x "${DOWNLOAD_SCRIPT}" ]] || die "Download helper is missing."
@@ -1813,6 +2240,12 @@ command_model() {
         attach)
             [[ -x "${DOWNLOAD_SCRIPT}" ]] || die "Download helper is missing."
             "${DOWNLOAD_SCRIPT}" attach "$@"
+            ;;
+        resume)
+            ensure_hf_cli
+            ensure_hf_token
+            [[ -x "${DOWNLOAD_SCRIPT}" ]] || die "Download helper is missing."
+            "${DOWNLOAD_SCRIPT}" resume "$@"
             ;;
         cancel)
             [[ -x "${DOWNLOAD_SCRIPT}" ]] || die "Download helper is missing."
@@ -1864,7 +2297,7 @@ command_model() {
             [[ -z "${previous}" ]] || printf 'Preserved mirror: %s\n' "${previous}"
             ;;
         *)
-            die "Usage: ./colibri.sh model download|verify|status|attach|cancel|mirror|mirror-status|mirror-attach|enable-mirror|disable-mirror"
+            die "Usage: ./colibri.sh model download|verify|repair|status|attach|resume|cancel|mirror|mirror-status|mirror-attach|enable-mirror|disable-mirror"
             ;;
     esac
 }
@@ -1953,23 +2386,57 @@ open_webui_container_check() {
     local payload
     payload="$(printf '%s\n%s\n%s\n' "${base_url}" "${COLI_API_KEY}" "${MODEL_ID}")"
     printf '%s' "${payload}" |
-        docker exec -i "${container}" python3 -c '
-import json, sys, urllib.request
-url, key, model_id = sys.stdin.read().splitlines()[:3]
-headers = {"Authorization": "Bearer " + key}
-opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-def get(path):
-    request = urllib.request.Request(url.rstrip("/") + path, headers=headers)
-    with opener.open(request, timeout=30) as response:
-        return json.loads(response.read().decode("utf-8"))
-health = get("/health")
-if health.get("status") not in {"ok", "ready"}:
-    raise SystemExit("Colibri health is not ready: " + json.dumps(health))
-models = get("/v1/models")
-model_ids = [item.get("id") for item in models.get("data", [])]
-if model_id not in model_ids:
-    raise SystemExit(f"Expected model {model_id!r}; received {model_ids!r}")
-print(json.dumps({"health": health.get("status"), "model": model_id}, indent=2))
+        docker exec -i "${container}" sh -c '
+set -eu
+IFS= read -r base_url
+IFS= read -r api_key
+IFS= read -r model_id
+base_url=${base_url%/}
+
+if command -v curl >/dev/null 2>&1; then
+    health=$(
+        curl --silent --show-error --fail --noproxy "*" \
+            --header "Authorization: Bearer ${api_key}" \
+            "${base_url}/health"
+    )
+    models=$(
+        curl --silent --show-error --fail --noproxy "*" \
+            --header "Authorization: Bearer ${api_key}" \
+            "${base_url}/v1/models"
+    )
+elif command -v wget >/dev/null 2>&1; then
+    health=$(
+        wget -qO- --no-proxy \
+            --header="Authorization: Bearer ${api_key}" \
+            "${base_url}/health"
+    )
+    models=$(
+        wget -qO- --no-proxy \
+            --header="Authorization: Bearer ${api_key}" \
+            "${base_url}/v1/models"
+    )
+else
+    printf "Open WebUI container has neither curl nor wget.\n" >&2
+    exit 1
+fi
+
+compact_health=$(printf "%s" "${health}" | tr -d "[:space:]")
+compact_models=$(printf "%s" "${models}" | tr -d "[:space:]")
+case "${compact_health}" in
+    *"\"status\":\"ok\""* | *"\"status\":\"ready\""*) ;;
+    *)
+        printf "Colibri health is not ready: %s\n" "${health}" >&2
+        exit 1
+        ;;
+esac
+case "${compact_models}" in
+    *"\"id\":\"${model_id}\""*) ;;
+    *)
+        printf "Expected model %s; received: %s\n" "${model_id}" "${models}" >&2
+        exit 1
+        ;;
+esac
+printf "Container connectivity passed: health=ready model=%s\n" "${model_id}"
 '
 }
 
@@ -2171,35 +2638,45 @@ command_ui() {
 command_hf_token() {
     require_non_root
     local action=${1:-status}
-    ensure_hf_cli
 
     case "${action}" in
         set)
             local token=""
             printf 'Create a read-only token at:\n'
             printf '  https://huggingface.co/settings/tokens\n'
-            printf 'The token is stored by Hugging Face in your user credential store.\n'
-            read -r -s -p 'Hugging Face token: ' token
+            printf 'It will be stored as HF_TOKEN in:\n'
+            printf '  %s\n' "${HF_ENV_FILE}"
+            IFS= read -r -s -p 'HF_TOKEN: ' token
             printf '\n'
-            [[ -n "${token}" ]] || die "Token was empty."
-            HF_TOKEN="${token}" "${HF_VENV_DIR}/bin/python" - <<'PY'
-import os
-from huggingface_hub import HfFolder
-HfFolder.save_token(os.environ["HF_TOKEN"])
-PY
+            [[ -n "${token}" ]] || die "HF_TOKEN was empty."
+            write_hf_token "${token}"
+            token=""
             unset token
-            "${HF_VENV_DIR}/bin/hf" auth whoami
+            info "HF_TOKEN saved in the private user .env file."
+            printf 'It will be exported only to Hugging Face subprocesses.\n'
             ;;
         status)
-            if ! "${HF_VENV_DIR}/bin/hf" auth whoami; then
-                warn "No valid token is active. Public downloads still work but may be rate-limited."
+            local source_description="current process environment"
+            if [[ -z "${HF_TOKEN:-}" ]]; then
+                source_description="${HF_ENV_FILE}"
+            fi
+            if ! load_hf_token; then
+                warn "HF_TOKEN is not configured. Managed Hugging Face operations will not run."
+                printf 'Configure it with: ./colibri.sh hf-token set\n' >&2
                 return 1
             fi
+            printf 'HF_TOKEN is configured from %s.\n' "${source_description}"
             ;;
         remove)
-            confirm "Remove the Hugging Face token from the official user credential store?" no ||
-                die "Token removal cancelled."
-            "${HF_VENV_DIR}/bin/hf" auth logout
+            [[ -e "${HF_ENV_FILE}" ]] || {
+                info "HF_TOKEN .env file is already absent."
+                return 0
+            }
+            validate_hf_env_file
+            confirm "Remove the private HF_TOKEN .env file?" no ||
+                die "HF_TOKEN removal cancelled."
+            rm -f -- "${HF_ENV_FILE}"
+            info "HF_TOKEN .env file removed."
             ;;
         *)
             die "Usage: ./colibri.sh hf-token set|status|remove"

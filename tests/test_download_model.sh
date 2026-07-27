@@ -66,6 +66,11 @@ SCREEN
 cat > "${BIN_DIR}/hf" <<'HF'
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ -n "${MOCK_EXPECT_HF_TOKEN:-}" &&
+    "${HF_TOKEN:-}" != "${MOCK_EXPECT_HF_TOKEN}" ]]; then
+    printf 'HF_TOKEN was not exported to the hf process\n' >&2
+    exit 97
+fi
 printf '%s\n' "$@" > "${MOCK_ROOT}/hf.args"
 destination=''
 while (($#)); do
@@ -152,7 +157,7 @@ start_job() {
 }
 
 printf '1. start, validation, status, attach, and token secrecy\n'
-export HF_TOKEN='hf_test_secret_must_not_leak'
+export HF_TOKEN='hf_testsecretmustnotleak'
 output="$(start_job 'test/model-success' "${TEST_ROOT}/direct-success")"
 job="$(awk '/^Job: / {print $2}' <<< "$output")"
 [[ -n "$job" ]] || fail "Start did not print a job ID"
@@ -164,6 +169,7 @@ assert_contains "$attach_output" 'not running'
 grep -R -F "$HF_TOKEN" "$COLIBRI_DOWNLOAD_STATE_DIR" "$MOCK_ROOT/hf.args" >/dev/null 2>&1 &&
     fail "HF_TOKEN leaked into state, log, or command arguments"
 unset HF_TOKEN
+export HF_TOKEN='hf_testruntimetoken'
 
 printf '2. transient failure retries and completes\n'
 rm -f "${MOCK_ROOT}/hf.counter"
@@ -199,5 +205,19 @@ unset MOCK_HF_MODE
 resume_output="$("$SCRIPT" resume "$job" --no-token-prompt)"
 assert_contains "$resume_output" 'Download started in detached Screen session'
 wait_for_status "$job" complete
+
+unset HF_TOKEN
+
+printf '5. private .env token is loaded and exported automatically\n'
+mkdir -p "${HOME}/.config/colibri-setup"
+chmod 700 "${HOME}/.config/colibri-setup"
+printf 'HF_TOKEN=hf_envfiletoken\n' >"${HOME}/.config/colibri-setup/.env"
+chmod 600 "${HOME}/.config/colibri-setup/.env"
+export MOCK_EXPECT_HF_TOKEN='hf_envfiletoken'
+rm -f "${MOCK_ROOT}/hf.counter"
+output="$(start_job 'test/model-envfile' 'envfile')"
+job="$(awk '/^Job: / {print $2}' <<<"$output")"
+wait_for_status "$job" complete
+unset MOCK_EXPECT_HF_TOKEN
 
 printf 'All download manager tests passed.\n'
