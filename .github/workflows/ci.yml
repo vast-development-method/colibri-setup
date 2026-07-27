@@ -63,5 +63,8 @@ jobs:
       - name: Test detached download manager with fakes
         run: tests/test_download_model.sh
 
+      - name: Test model checksum verification with a fake Hub
+        run: bash tests/test_model_verify.sh
+
       - name: Test mirror verification with fixtures
         run: tests/test_mirror_model.sh
