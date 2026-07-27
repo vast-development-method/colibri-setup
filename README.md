@@ -123,11 +123,18 @@ downloads retry with backoff and can be resumed without starting from zero.
 When the download has completed:
 
 ```bash
+./colibri.sh model verify
 ./colibri.sh doctor
 ./colibri.sh plan
 ./colibri.sh start
 ./colibri.sh logs --follow
 ```
+
+`model verify` uses Hugging Face's checksum verifier against the configured
+repository. It fails if a repository file is missing or if any checksum does
+not match. It does not download, replace, or delete model files. Colibri's
+runtime sidecars may be reported as extra local files, but they do not cause
+verification to fail.
 
 In another terminal, verify discovery and run a tiny completion:
 
