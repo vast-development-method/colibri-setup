@@ -43,7 +43,10 @@ require_non_root() {
 }
 
 load_config() {
+    # The sourced command_model function consumes these cross-file globals.
+    # shellcheck disable=SC2034
     MODEL_REPO="example/model"
+    # shellcheck disable=SC2034
     MODEL_DIR="${MODEL_DIR_FIXTURE}"
 }
 
