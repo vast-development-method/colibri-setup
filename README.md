@@ -73,7 +73,6 @@ Clone this repository and inspect the deployment plan:
 ```bash
 git clone https://github.com/vast-development-method/colibri-setup.git
 cd colibri-setup
-chmod +x colibri.sh scripts/*.sh tests/*.sh
 ./colibri.sh --help
 ```
 

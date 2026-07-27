@@ -8,7 +8,6 @@ commands.
 Run it from this repository:
 
 ```bash
-chmod +x colibri.sh scripts/download_model.sh
 ./colibri.sh --help
 ```
 
