@@ -1047,14 +1047,14 @@ extract_model_repair_targets() {
                 checksum_fields[4] == "got" &&
                 is_sha256(checksum_fields[5]) &&
                 is_model_artifact(target)) {
-                print target
+                printf "%s\t%s\n", target, tolower(checksum_fields[2])
             }
             next
         }
         section == "missing" && /^  - / {
             target = substr($0, 5)
             if (is_model_artifact(target)) {
-                print target
+                printf "%s\t-\n", target
             }
             next
         }
@@ -1063,6 +1063,17 @@ extract_model_repair_targets() {
         }
     ' "${verification_output}" |
         LC_ALL=C sort -u
+}
+
+model_repair_record_path() {
+    printf '%s\n' "${1%%$'\t'*}"
+}
+
+model_repair_record_expected_sha256() {
+    local record=$1
+    [[ "${record}" == *$'\t'* ]] ||
+        die "Invalid model repair record without an expected-hash field."
+    printf '%s\n' "${record#*$'\t'}"
 }
 
 has_only_mutable_usage_mismatch() {
@@ -1209,8 +1220,8 @@ parse_model_repair_arguments() {
 build_model_repair_plan() {
     local repository=$1
     local destination=$2
-    local repair_files_variable=$3
-    local -n repair_files_reference="${repair_files_variable}"
+    local repair_records_variable=$3
+    local -n repair_records_reference="${repair_records_variable}"
     local verification_output
     local repair_list
     local verification_status=0
@@ -1236,9 +1247,9 @@ build_model_repair_plan() {
         die "Could not build a reliable repair plan; no model files were changed."
     fi
 
-    mapfile -t repair_files_reference <"${repair_list}"
+    mapfile -t repair_records_reference <"${repair_list}"
     rm -f -- "${repair_list}"
-    ((${#repair_files_reference[@]} > 0)) ||
+    ((${#repair_records_reference[@]} > 0)) ||
         die "Verification failed without identifying a safe model-artifact repair target."
     return 1
 }
@@ -1246,14 +1257,26 @@ build_model_repair_plan() {
 validate_and_print_model_repair_plan() {
     local destination=$1
     shift
-    local -a repair_files=("$@")
+    local -a repair_records=("$@")
+    local repair_record
     local repair_file
+    local expected_sha256
 
     printf '\nExactly these %d missing or corrupt model file(s) will be repaired:\n' \
-        "${#repair_files[@]}"
-    for repair_file in "${repair_files[@]}"; do
+        "${#repair_records[@]}"
+    for repair_record in "${repair_records[@]}"; do
+        repair_file="$(model_repair_record_path "${repair_record}")"
+        expected_sha256="$(model_repair_record_expected_sha256 "${repair_record}")"
         validate_model_repair_target "${destination}" "${repair_file}"
-        printf '  - %s\n' "${repair_file}"
+        if [[ "${expected_sha256}" == "-" ]]; then
+            printf '  - %s (missing; checksum will be verified before activation)\n' \
+                "${repair_file}"
+        else
+            [[ "${expected_sha256}" =~ ^[0-9a-f]{64}$ ]] ||
+                die "Invalid expected SHA-256 in model repair plan for ${repair_file}."
+            printf '  - %s (expected SHA-256: %s)\n' \
+                "${repair_file}" "${expected_sha256}"
+        fi
     done
 }
 
@@ -1269,7 +1292,13 @@ download_model_repair_files() {
     local repository=$1
     local repair_stage=$2
     shift 2
-    local -a repair_files=("$@")
+    local -a repair_records=("$@")
+    local -a repair_files=()
+    local repair_record
+
+    for repair_record in "${repair_records[@]}"; do
+        repair_files+=("$(model_repair_record_path "${repair_record}")")
+    done
 
     info "Downloading the exact repair list into an isolated staging directory"
     printf 'Hugging Face may display many transfer chunks for one large file; the file list above is the complete repair scope.\n'
@@ -1284,16 +1313,70 @@ download_model_repair_files() {
 }
 
 validate_staged_model_repair() {
-    local repair_stage=$1
-    shift
+    local repository=$1
+    local destination=$2
+    local repair_stage=$3
+    shift 3
+    local -a repair_records=("$@")
+    local repair_record
     local repair_file
+    local expected_sha256
+    local actual_sha256
+    local verification_view
+    local verification_output
 
-    for repair_file in "$@"; do
+    for repair_record in "${repair_records[@]}"; do
+        repair_file="$(model_repair_record_path "${repair_record}")"
+        expected_sha256="$(model_repair_record_expected_sha256 "${repair_record}")"
         [[ -s "${repair_stage}/${repair_file}" ]] || {
             error "Hugging Face did not produce the requested repair file: ${repair_file}"
             return 1
         }
+        if [[ "${expected_sha256}" != "-" ]]; then
+            actual_sha256="$(sha256sum -- "${repair_stage}/${repair_file}")"
+            actual_sha256=${actual_sha256%% *}
+            if [[ "${actual_sha256}" != "${expected_sha256}" ]]; then
+                error "Downloaded repair file failed SHA-256 verification: ${repair_file}"
+                error "Expected: ${expected_sha256}"
+                error "Actual:   ${actual_sha256}"
+                return 1
+            fi
+        fi
     done
+
+    verification_view="$(
+        mktemp -d "$(dirname -- "${destination}")/.colibri-repair-verify.XXXXXX"
+    )"
+    if ! cp -al -- "${destination}/." "${verification_view}/"; then
+        rm -rf --one-file-system -- "${verification_view}"
+        error "Could not create the hard-linked model verification view."
+        return 1
+    fi
+
+    for repair_record in "${repair_records[@]}"; do
+        repair_file="$(model_repair_record_path "${repair_record}")"
+        mkdir -p -- "${verification_view}/$(dirname -- "${repair_file}")"
+        rm -f -- "${verification_view}/${repair_file}"
+        if ! ln -- "${repair_stage}/${repair_file}" \
+            "${verification_view}/${repair_file}"; then
+            rm -rf --one-file-system -- "${verification_view}"
+            error "Could not add staged file to verification view: ${repair_file}"
+            return 1
+        fi
+    done
+
+    verification_output="$(mktemp)"
+    if ! run_model_integrity \
+        "${repository}" \
+        "${verification_view}" \
+        "${verification_output}"; then
+        rm -f -- "${verification_output}"
+        rm -rf --one-file-system -- "${verification_view}"
+        error "The prospective repaired model failed complete checksum verification."
+        return 1
+    fi
+    rm -f -- "${verification_output}"
+    rm -rf --one-file-system -- "${verification_view}"
 }
 
 activate_model_repair_files() {
@@ -1362,8 +1445,10 @@ verify_completed_model_repair() {
 perform_model_repair() {
     local repository=$1
     local destination=$2
+    local -a repair_records=()
     local -a repair_files=()
     local -a activated_files=()
+    local repair_record
     local repair_stage
     local repair_backup
 
@@ -1374,12 +1459,15 @@ perform_model_repair() {
     if build_model_repair_plan \
         "${repository}" \
         "${destination}" \
-        repair_files; then
+        repair_records; then
         info "No repair is needed; the model already passes verification."
         return 0
     fi
 
-    validate_and_print_model_repair_plan "${destination}" "${repair_files[@]}"
+    validate_and_print_model_repair_plan "${destination}" "${repair_records[@]}"
+    for repair_record in "${repair_records[@]}"; do
+        repair_files+=("$(model_repair_record_path "${repair_record}")")
+    done
     assert_model_repair_service_stopped
     confirm "Download and atomically repair only the listed file(s)?" no ||
         die "Model repair cancelled."
@@ -1391,12 +1479,16 @@ perform_model_repair() {
     if ! download_model_repair_files \
         "${repository}" \
         "${repair_stage}" \
-        "${repair_files[@]}"; then
+        "${repair_records[@]}"; then
         rm -rf --one-file-system -- "${repair_stage}"
         die "Staged repair download failed. The live model directory was not changed."
     fi
 
-    if ! validate_staged_model_repair "${repair_stage}" "${repair_files[@]}"; then
+    if ! validate_staged_model_repair \
+        "${repository}" \
+        "${destination}" \
+        "${repair_stage}" \
+        "${repair_records[@]}"; then
         rm -rf --one-file-system -- "${repair_stage}"
         die "Staged repair validation failed. The live model directory was not changed."
     fi
