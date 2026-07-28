@@ -49,9 +49,11 @@ if [[ "${1:-}" == "cache" && "${2:-}" == "verify" ]]; then
     fi
 
     printf 'Checksum verification failed for the following file(s):\n'
-    printf '  - out-mtp-00000.safetensors: expected expected-sha256 (sha256), got actual-sha256\n'
+    printf '  - out-mtp-00000.safetensors: expected 7bc4cf7bb8838a7af02aea7cb1a2db5e25c5cc0b12d586ae36d8ba7443d2c4f8 (sha256), got dc020ddbb87347f7e6711c9e8cd2715ac79a2a9f2b4599ff11b7980a35e3cf88\n'
+    printf '  - README.md: expected malformed-value (sha256), got malformed-value\n'
     printf 'Missing files (present remotely, absent locally):\n'
     printf '  - .coli_usage\n'
+    printf '  - MODEL_CARD.md\n'
     printf 'Error: Verification failed.\n'
     exit 1
 fi
@@ -148,6 +150,14 @@ grep -Fxq 'out-mtp-00000.safetensors' "${HF_ARGS_FILE}" || {
 }
 grep -Fxq '.coli_usage' "${HF_ARGS_FILE}" && {
     printf 'model repair: mutable runtime state was incorrectly requested\n' >&2
+    exit 1
+}
+grep -Fxq 'README.md' "${HF_ARGS_FILE}" && {
+    printf 'model repair: non-model repository content was incorrectly requested\n' >&2
+    exit 1
+}
+grep -Fxq 'MODEL_CARD.md' "${HF_ARGS_FILE}" && {
+    printf 'model repair: missing non-model content was incorrectly requested\n' >&2
     exit 1
 }
 
