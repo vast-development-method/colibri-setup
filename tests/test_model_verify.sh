@@ -20,7 +20,11 @@ mkdir -p -- "${HOME}" "${XDG_DATA_HOME}/colibri-setup/hf-venv/bin"
 
 MODEL_DIR_FIXTURE="${TEST_ROOT}/model"
 HF_ARGS_FILE="${TEST_ROOT}/hf.args"
-readonly MODEL_DIR_FIXTURE HF_ARGS_FILE
+REPAIRED_CONTENT='repaired shard'
+REPAIRED_SHA256="$(
+    printf '%s\n' "${REPAIRED_CONTENT}" | sha256sum | awk '{print $1}'
+)"
+readonly MODEL_DIR_FIXTURE HF_ARGS_FILE REPAIRED_CONTENT REPAIRED_SHA256
 mkdir -p -- "${MODEL_DIR_FIXTURE}"
 printf 'original broken shard\n' >"${MODEL_DIR_FIXTURE}/out-mtp-00000.safetensors"
 
@@ -42,14 +46,23 @@ if [[ "${1:-}" == "cache" && "${2:-}" == "verify" ]]; then
         esac
     done
 
-    if [[ "${HF_VERIFY_RESULT:-failure}" == "success" ]] ||
-        grep -Fxq 'repaired shard' "${destination}/out-mtp-00000.safetensors" 2>/dev/null; then
+    if [[ "${HF_VERIFY_RESULT:-failure}" == "success" ]]; then
+        printf 'Verified model files. All checksums match.\n'
+        exit 0
+    fi
+
+    actual_sha256="$(
+        sha256sum -- "${destination}/out-mtp-00000.safetensors" |
+            awk '{print $1}'
+    )"
+    if [[ "${actual_sha256}" == "${HF_EXPECT_REPAIRED_SHA256:?}" ]]; then
         printf 'Verified model files. All checksums match.\n'
         exit 0
     fi
 
     printf 'Checksum verification failed for the following file(s):\n'
-    printf '  - out-mtp-00000.safetensors: expected 7bc4cf7bb8838a7af02aea7cb1a2db5e25c5cc0b12d586ae36d8ba7443d2c4f8 (sha256), got dc020ddbb87347f7e6711c9e8cd2715ac79a2a9f2b4599ff11b7980a35e3cf88\n'
+    printf '  - out-mtp-00000.safetensors: expected %s (sha256), got %s\n' \
+        "${HF_EXPECT_REPAIRED_SHA256:?}" "${actual_sha256}"
     printf '  - README.md: expected malformed-value (sha256), got malformed-value\n'
     printf 'Missing files (present remotely, absent locally):\n'
     printf '  - .coli_usage\n'
@@ -83,10 +96,18 @@ while (($#)); do
 done
 
 [[ -n "${destination}" ]] || exit 1
-printf 'repaired shard\n' >"${destination}/out-mtp-00000.safetensors"
+if [[ "${HF_DOWNLOAD_WRONG_HASH:-0}" == "1" ]]; then
+    printf 'wrong downloaded bytes\n' \
+        >"${destination}/out-mtp-00000.safetensors"
+else
+    printf '%s\n' "${HF_REPAIRED_CONTENT:?}" \
+        >"${destination}/out-mtp-00000.safetensors"
+fi
 EOF
 chmod +x "${XDG_DATA_HOME}/colibri-setup/hf-venv/bin/hf"
 export HF_ARGS_FILE
+export HF_REPAIRED_CONTENT="${REPAIRED_CONTENT}"
+export HF_EXPECT_REPAIRED_SHA256="${REPAIRED_SHA256}"
 
 # shellcheck source=../colibri.sh
 source "${REPOSITORY_ROOT}/colibri.sh"
@@ -125,6 +146,18 @@ if (command_model verify >/dev/null 2>&1); then
     printf 'model verify: checksum failure was not propagated\n' >&2
     exit 1
 fi
+
+original_content="$(<"${MODEL_DIR_FIXTURE}/out-mtp-00000.safetensors")"
+export HF_DOWNLOAD_WRONG_HASH=1
+if (command_model repair --yes >/dev/null 2>&1); then
+    printf 'model repair: wrong staged SHA-256 was accepted\n' >&2
+    exit 1
+fi
+[[ "$(<"${MODEL_DIR_FIXTURE}/out-mtp-00000.safetensors")" == "${original_content}" ]] || {
+    printf 'model repair: live shard changed after staged SHA-256 failure\n' >&2
+    exit 1
+}
+export HF_DOWNLOAD_WRONG_HASH=0
 
 output="$(command_model repair --yes 2>&1)"
 grep -Fq 'Exactly these 1 missing or corrupt model file(s)' <<<"${output}" || {
