@@ -1836,23 +1836,8 @@ stop_service_for_source_activation() {
 model_is_ready() {
     [[ -r "${MODEL_DIR}/config.json" ]] || return 1
     [[ -r "${MODEL_DIR}/tokenizer.json" ]] || return 1
-    local shard_count
-    shard_count="$(
-        find -L "${MODEL_DIR}" -maxdepth 1 -type f -name '*.safetensors' -printf '.' |
-            wc -c
-    )"
-    ((shard_count > 0)) || return 1
-
-    if [[ "${MODEL_REPO}" == "${DEFAULT_MODEL_REPO}" ]]; then
-        ((shard_count >= 100)) || return 1
-        local -a mtp_sizes=()
-        mapfile -t mtp_sizes < <(
-            find -L "${MODEL_DIR}" -maxdepth 1 -type f -name 'out-mtp-*' -printf '%s\n' |
-                sort -n
-        )
-        local expected_sizes="1065950496 3527131672 5366238584"
-        [[ "${mtp_sizes[*]:-}" == "${expected_sizes}" ]] || return 1
-    fi
+    find -L "${MODEL_DIR}" -maxdepth 1 -type f -name '*.safetensors' -print -quit |
+        grep -q . || return 1
 
     if [[ -r "${MODEL_DIR}/model.safetensors.index.json" ]]; then
         command -v jq >/dev/null 2>&1 || return 1
@@ -1880,6 +1865,36 @@ model_is_ready() {
         done
     fi
     return 0
+}
+
+model_repository_is_verified() {
+    local repository=$1
+    local destination=$2
+    local verification_output
+    local status=0
+
+    validate_model_repository "${repository}"
+    destination="$(resolve_existing_model_directory "${destination}")"
+    ensure_hf_cli
+    ensure_hf_token
+
+    verification_output="$(mktemp)"
+    info "Verifying existing model against Hugging Face checksums"
+    printf 'Repository: %s\n' "${repository}"
+    printf 'Directory:  %s\n' "${destination}"
+    if run_model_integrity         "${repository}"         "${destination}"         "${verification_output}"; then
+        status=0
+    else
+        status=$?
+    fi
+    rm -f -- "${verification_output}"
+
+    if ((status == 0)); then
+        info "Existing model verification passed."
+    else
+        warn "Existing model verification failed; the model will not be started or downloaded again."
+    fi
+    return "${status}"
 }
 
 validate_model() {
@@ -2132,8 +2147,13 @@ command_install() {
     install_service_unit
     write_manifest
 
-    if model_is_ready; then
-        info "Validating existing model"
+    local model_verified="0"
+    if [[ -d "${MODEL_DIR}" ]] &&
+        model_repository_is_verified "${MODEL_REPO}" "${MODEL_DIR}"; then
+        model_verified="1"
+    fi
+
+    if [[ "${model_verified}" == "1" ]]; then
         validate_model
         command_doctor
         command_plan
@@ -2149,12 +2169,17 @@ command_install() {
         fi
     else
         sudo systemctl disable --now "${SERVICE_NAME}" >/dev/null 2>&1 || true
-        warn "The service remains disabled because the model is not complete."
-        if [[ "${NO_DOWNLOAD}" == "0" ]] &&
-            confirm "Start the approximately 372 GB model download in GNU Screen?" yes; then
+        if [[ -d "${MODEL_DIR}" ]]; then
+            warn "The service remains disabled because the existing model failed authoritative checksum verification."
+            printf 'No full model download was started or offered.\n'
+            printf 'Review the verification output above, then selectively repair only proven targets with:\n'
+            printf '  ./colibri.sh model repair %q %q\n' "${MODEL_REPO}" "${MODEL_DIR}"
+        elif [[ "${NO_DOWNLOAD}" == "0" ]] &&
+            confirm "The model directory is absent. Start the approximately 372 GB model download in GNU Screen?" yes; then
             command_model download "${MODEL_REPO}" "${MODEL_DIR}" --yes
         else
-            printf 'Start it later with:\n'
+            warn "The service remains disabled because the model directory does not exist."
+            printf 'Start the initial download later with:\n'
             printf '  ./colibri.sh model download %q %q\n' "${MODEL_REPO}" "${MODEL_DIR}"
         fi
     fi
