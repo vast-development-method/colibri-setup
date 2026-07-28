@@ -518,6 +518,9 @@ min_int() {
 
 resolve_profile() {
     local requested_profile=$1
+    local requested_ram=${2:-}
+    local requested_context=${3:-}
+    local requested_workers=${4:-}
     local total_ram
     local available_ram
     local safe_ram_ceiling
@@ -591,18 +594,18 @@ resolve_profile() {
             PILOT_REAL="1"
             ;;
         custom)
-            CUSTOM_RAM="${CUSTOM_RAM:-${RAM_GB:-}}"
-            CUSTOM_CTX="${CUSTOM_CTX:-${CTX:-}}"
-            CUSTOM_WORKERS="${CUSTOM_WORKERS:-${PIPE_WORKERS:-}}"
-            [[ -n "${CUSTOM_RAM}" && -n "${CUSTOM_CTX}" && -n "${CUSTOM_WORKERS}" ]] ||
+            requested_ram="${requested_ram:-${CUSTOM_RAM:-${RAM_GB:-}}}"
+            requested_context="${requested_context:-${CUSTOM_CTX:-${CTX:-}}}"
+            requested_workers="${requested_workers:-${CUSTOM_WORKERS:-${PIPE_WORKERS:-}}}"
+            [[ -n "${requested_ram}" && -n "${requested_context}" && -n "${requested_workers}" ]] ||
                 die "The custom profile requires --ram, --ctx, and --workers."
-            validate_integer "${CUSTOM_RAM}" "RAM budget" 16 "${safe_ram_ceiling}"
-            validate_integer "${CUSTOM_CTX}" "Context" 512 131072
-            validate_integer "${CUSTOM_WORKERS}" "Worker count" 1 64
-            RAM_GB="${CUSTOM_RAM}"
-            CTX="${CUSTOM_CTX}"
-            PIPE_WORKERS="${CUSTOM_WORKERS}"
-            PIN_GB="$((CUSTOM_RAM / 4))"
+            validate_integer "${requested_ram}" "RAM budget" 16 "${safe_ram_ceiling}"
+            validate_integer "${requested_context}" "Context" 512 131072
+            validate_integer "${requested_workers}" "Worker count" 1 64
+            RAM_GB="${requested_ram}"
+            CTX="${requested_context}"
+            PIPE_WORKERS="${requested_workers}"
+            PIN_GB="$((requested_ram / 4))"
             ((PIN_GB >= 4)) || PIN_GB="4"
             MAX_QUEUE="4"
             DIRECT="1"
