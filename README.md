@@ -59,8 +59,7 @@ is missing or invalid.
 
 The installer supplies the required compiler, Git, Python virtual
 environment, Hugging Face CLI, GNU Screen, `rsync`, and supporting packages.
-Node.js and npm are installed only when the optional Colibri dashboard is
-built.
+Node.js 22 and npm are installed for the default Colibri dashboard.
 
 Run the toolkit as the account that should own Colibri. Do not run
 `colibri.sh` as root; it uses `sudo` only for packages, protected
@@ -76,13 +75,11 @@ cd colibri-setup
 ./colibri.sh --help
 ```
 
-Install the balanced, API-only deployment on the default private port:
+Install the default performance deployment with Colibri's own dashboard on
+port `11435`:
 
 ```bash
-./colibri.sh install \
-    --profile balanced \
-    --ui api-only \
-    --port 11435
+./colibri.sh install
 ```
 
 The installer shows every resolved path and resource value before asking for
