@@ -34,6 +34,10 @@ removes only a source checkout created by this toolkit, and `--purge-config`
 explicitly removes its generated configuration. The primary model and mirror
 are always preserved.
 
+`uninstall` is also safe after a failed first installation. Installation
+ownership is recorded before package and build steps; if transactional cleanup
+already removed everything, `uninstall` reports that state successfully.
+
 The generated configuration is `/etc/colibri-setup/colibri.env`; its API key
 is secret. The managed unit is `colibri.service`.
 
