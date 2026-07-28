@@ -1159,8 +1159,6 @@ parse_model_repair_arguments() {
     local destination_variable=$2
     shift 2
 
-    local -n repository_reference="${repository_variable}"
-    local -n destination_reference="${destination_variable}"
     local -a positionals=()
 
     while (($#)); do
@@ -1189,8 +1187,10 @@ parse_model_repair_arguments() {
     ((${#positionals[@]} <= 2)) ||
         die "Usage: ./colibri.sh model repair [MODEL_REPOSITORY] [MODEL_DIRECTORY] [--yes]"
 
-    repository_reference="${positionals[0]:-${MODEL_REPO}}"
-    destination_reference="${positionals[1]:-${MODEL_DIR}}"
+    printf -v "${repository_variable}" '%s' \
+        "${positionals[0]:-${MODEL_REPO}}"
+    printf -v "${destination_variable}" '%s' \
+        "${positionals[1]:-${MODEL_DIR}}"
 }
 
 build_model_repair_plan() {
