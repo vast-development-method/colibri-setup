@@ -40,7 +40,7 @@ MIRROR_DIR=""
 UPSTREAM_REF="${DEFAULT_UPSTREAM_REF}"
 BIND_HOST="127.0.0.1"
 PORT="${DEFAULT_PORT}"
-PROFILE="balanced"
+PROFILE="performance"
 RAM_GB=""
 CTX=""
 PIPE_WORKERS=""
@@ -52,7 +52,7 @@ DIRECT="1"
 URING="0"
 PILOT="0"
 PILOT_REAL="0"
-UI_MODE="api-only"
+UI_MODE="colibri-web"
 COLI_API_KEY=""
 SOURCE_CREATED="0"
 
@@ -276,8 +276,8 @@ Common install/configure options:
 Defaults:
   Port:         11435
   Bind:         127.0.0.1
-  Profile:      balanced
-  UI:           api-only
+  Profile:      performance
+  UI:           colibri-web
   Upstream:     Colibri v1.1.1 (updated only by `upgrade`)
   Model:        mastouri/GLM-5.2-colibri-int4-g64-with-int8-mtp
 EOF
@@ -881,6 +881,7 @@ install_dependencies() {
         ca-certificates \
         curl \
         git \
+        gnupg \
         iproute2 \
         jq \
         openssl \
@@ -1550,15 +1551,75 @@ build_colibri() {
     fi
 }
 
+node_version_supports_colibri_web() {
+    local version=${1#v}
+    local major
+    local minor
+
+    [[ "${version}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+) ]] || return 1
+    major=${BASH_REMATCH[1]}
+    minor=${BASH_REMATCH[2]}
+
+    ((major == 20 && minor >= 19)) ||
+        ((major == 22 && minor >= 12)) ||
+        ((major >= 23))
+}
+
+install_supported_nodejs() {
+    require_command sudo
+    require_command curl
+    command -v apt-get >/dev/null 2>&1 ||
+        die "Automatic Node.js installation currently supports Ubuntu/Debian (apt-get)."
+
+    info "Installing Node.js 22 for the optional Colibri dashboard"
+    sudo install -d -m 0755 /etc/apt/keyrings
+
+    local keyring
+    keyring="$(mktemp)"
+    if ! curl --fail --silent --show-error --location \
+        https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key |
+        gpg --dearmor >"${keyring}"; then
+        rm -f -- "${keyring}"
+        die "Could not download the NodeSource repository signing key."
+    fi
+    sudo install -m 0644 "${keyring}" /etc/apt/keyrings/nodesource.gpg
+    rm -f -- "${keyring}"
+
+    printf '%s\n' \
+        'deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main' |
+        sudo tee /etc/apt/sources.list.d/nodesource.list >/dev/null
+    sudo apt-get update
+    sudo apt-get install -y nodejs
+}
+
+ensure_supported_nodejs() {
+    local installed_version=""
+
+    if command -v node >/dev/null 2>&1; then
+        installed_version="$(node --version)"
+    fi
+    if [[ -n "${installed_version}" ]] &&
+        node_version_supports_colibri_web "${installed_version}" &&
+        command -v npm >/dev/null 2>&1; then
+        return 0
+    fi
+
+    if [[ -n "${installed_version}" ]]; then
+        warn "Node.js ${installed_version} cannot build the Colibri dashboard; Node.js 20.19+ or 22.12+ is required."
+    fi
+    install_supported_nodejs
+
+    installed_version="$(node --version)"
+    node_version_supports_colibri_web "${installed_version}" ||
+        die "A supported Node.js release was not installed (found ${installed_version})."
+    require_command npm
+}
+
 ensure_colibri_web_assets() {
     local checkout_dir=${1:-${SOURCE_DIR}}
     [[ "${UI_MODE}" == "colibri-web" ]] || return 0
     [[ -d "${checkout_dir}/web" ]] || die "Upstream Colibri web source is missing."
-    if ! command -v npm >/dev/null 2>&1; then
-        info "Installing Node.js tooling for the optional Colibri dashboard"
-        sudo apt-get update
-        sudo apt-get install -y nodejs npm
-    fi
+    ensure_supported_nodejs
     info "Building Colibri's optional dashboard"
     (
         cd -- "${checkout_dir}/web"
