@@ -81,6 +81,49 @@ grep -Fq 'model repair [REPO] [DEST] [--yes]' <<<"${help_output}" || {
     exit 1
 }
 
+grep -Fq 'repair_config_permissions' colibri.sh || {
+    printf 'smoke: managed configuration permission recovery is missing\n' >&2
+    exit 1
+}
+
+test_root="$(mktemp -d)"
+trap 'rm -rf -- "${test_root}"' EXIT
+system_config_dir_under_test="${test_root}/etc/colibri-setup"
+script_under_test="${test_root}/colibri.sh"
+
+sed \
+    "s|readonly SYSTEM_CONFIG_DIR=\"/etc/colibri-setup\"|readonly SYSTEM_CONFIG_DIR=\"${system_config_dir_under_test}\"|" \
+    colibri.sh >"${script_under_test}"
+
+(
+    # shellcheck source=/dev/null
+    source "${script_under_test}"
+
+    mkdir -p -- "${system_config_dir_under_test}"
+    printf 'DEPLOY_USER=%s\n' "$(id -un)" >"${CONFIG_FILE}"
+    chmod 0666 -- "${CONFIG_FILE}"
+
+    sudo() {
+        "$@"
+    }
+
+    stat() {
+        if [[ "${1:-}" == "-c" && "${2:-}" == "%u" && "${3:-}" == "${CONFIG_FILE}" ]]; then
+            printf '0\n'
+            return 0
+        fi
+        command stat "$@"
+    }
+
+    assert_config_permissions
+    [[ "$(command stat -c '%a' "${CONFIG_FILE}")" == "640" ]] || {
+        printf 'smoke: unsafe managed configuration mode was not repaired to 0640\n' >&2
+        exit 1
+    }
+
+    assert_config_permissions
+)
+
 if grep -nE \
     '\brm[[:space:]].*(\$\{?MODEL_DIR|\$\{?MIRROR_DIR)' \
     colibri.sh
