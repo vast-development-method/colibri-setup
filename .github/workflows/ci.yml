@@ -55,7 +55,7 @@ jobs:
         run: tests/smoke.sh
 
       - name: Test resource profiles
-        run: tests/test_profiles.sh
+        run: bash tests/test_profiles.sh
 
       - name: Test UI asset modes
         run: tests/test_ui_assets.sh
