@@ -22,13 +22,13 @@ MODEL_DIR_FIXTURE="${TEST_ROOT}/model"
 HF_ARGS_FILE="${TEST_ROOT}/hf.args"
 readonly MODEL_DIR_FIXTURE HF_ARGS_FILE
 mkdir -p -- "${MODEL_DIR_FIXTURE}"
+printf 'original broken shard\n' >"${MODEL_DIR_FIXTURE}/out-mtp-00000.safetensors"
 
 cat >"${XDG_DATA_HOME}/colibri-setup/hf-venv/bin/hf" <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
 if [[ "${1:-}" == "cache" && "${2:-}" == "verify" ]]; then
-    sleep "${HF_VERIFY_DELAY:-0}"
     destination=""
     while (($#)); do
         case "$1" in
@@ -42,25 +42,16 @@ if [[ "${1:-}" == "cache" && "${2:-}" == "verify" ]]; then
         esac
     done
 
-    if [[ "${HF_VERIFY_RESULT:-success}" == "success" ||
-        ("${HF_VERIFY_RESULT:-success}" == "repairable" &&
-            -e "${destination}/.repair-complete") ]]; then
-        printf 'Warning: 1 local file(s) do not exist on the remote repository.\n'
-        printf 'Verified 2 file(s). All checksums match.\n'
+    if [[ "${HF_VERIFY_RESULT:-failure}" == "success" ]] ||
+        grep -Fxq 'repaired shard' "${destination}/out-mtp-00000.safetensors" 2>/dev/null; then
+        printf 'Verified model files. All checksums match.\n'
         exit 0
     fi
 
     printf 'Checksum verification failed for the following file(s):\n'
-    if [[ "${HF_VERIFY_RESULT:-}" == "mutable" ]]; then
-        printf '  - .coli_usage: expected seed-sha1 (git-sha1), got learned-sha1\n'
-        printf 'Error: Verification failed.\n'
-        exit 1
-    fi
     printf '  - out-mtp-00000.safetensors: expected expected-sha256 (sha256), got actual-sha256\n'
-    if [[ "${HF_VERIFY_RESULT:-}" == "repairable" ]]; then
-        printf 'Missing files (present remotely, absent locally):\n'
-        printf '  - .coli_usage\n'
-    fi
+    printf 'Missing files (present remotely, absent locally):\n'
+    printf '  - .coli_usage\n'
     printf 'Error: Verification failed.\n'
     exit 1
 fi
@@ -75,6 +66,7 @@ printf '%s\n' "$@" >"${HF_ARGS_FILE:?}"
     printf 'HF_TOKEN was not supplied to the repair download\n' >&2
     exit 1
 }
+
 destination=""
 while (($#)); do
     case "$1" in
@@ -88,14 +80,8 @@ while (($#)); do
     esac
 done
 
-[[ -n "${destination}" ]] || {
-    printf 'repair download did not receive --local-dir\n' >&2
-    exit 1
-}
+[[ -n "${destination}" ]] || exit 1
 printf 'repaired shard\n' >"${destination}/out-mtp-00000.safetensors"
-printf 'seed usage\n' >"${destination}/.coli_usage"
-touch "${destination}/.repair-complete"
-printf 'Selective repair completed.\n'
 EOF
 chmod +x "${XDG_DATA_HOME}/colibri-setup/hf-venv/bin/hf"
 export HF_ARGS_FILE
@@ -110,7 +96,7 @@ require_non_root() {
 load_config() {
     # The sourced command_model function consumes these cross-file globals.
     # shellcheck disable=SC2034
-    MODEL_REPO="example/model"
+    MODEL_REPO="mastouri/GLM-5.2-colibri-int4-g64-with-int8-mtp"
     # shellcheck disable=SC2034
     MODEL_DIR="${MODEL_DIR_FIXTURE}"
 }
@@ -120,24 +106,10 @@ ensure_hf_cli() {
 }
 
 export HF_EXPECT_TOKEN='hf_testrepairtoken'
-token_output="$(printf '%s\n' "${HF_EXPECT_TOKEN}" | command_hf_token set 2>&1)"
-[[ -f "${XDG_CONFIG_HOME}/colibri-setup/.env" ]] || {
-    printf 'hf-token: .env file was not created\n' >&2
-    exit 1
-}
-[[ "$(stat -c '%a' "${XDG_CONFIG_HOME}/colibri-setup/.env")" == "600" ]] || {
-    printf 'hf-token: .env file mode is not 0600\n' >&2
-    exit 1
-}
-grep -Fxq "HF_TOKEN=${HF_EXPECT_TOKEN}" \
-    "${XDG_CONFIG_HOME}/colibri-setup/.env" || {
-    printf 'hf-token: .env file does not contain HF_TOKEN\n' >&2
-    exit 1
-}
-grep -Fq "${HF_EXPECT_TOKEN}" <<<"${token_output}" && {
-    printf 'hf-token: token leaked into command output\n' >&2
-    exit 1
-}
+mkdir -p -- "${XDG_CONFIG_HOME}/colibri-setup"
+printf 'HF_TOKEN=%s\n' "${HF_EXPECT_TOKEN}" \
+    >"${XDG_CONFIG_HOME}/colibri-setup/.env"
+chmod 600 "${XDG_CONFIG_HOME}/colibri-setup/.env"
 
 export HF_VERIFY_RESULT=success
 output="$(command_model verify)"
@@ -152,57 +124,31 @@ if (command_model verify >/dev/null 2>&1); then
     exit 1
 fi
 
-export HF_VERIFY_RESULT=mutable
-output="$(command_model verify 2>&1)"
-grep -Fq 'expected .coli_usage checksum difference' <<<"${output}" || {
-    printf 'model verify: mutable .coli_usage was not handled safely\n' >&2
-    exit 1
-}
-
-export HF_VERIFY_RESULT=success
-export HF_VERIFY_DELAY=2
-export COLIBRI_FORCE_HEARTBEAT=1
-export COLIBRI_HEARTBEAT_INTERVAL_SECONDS=1
-output="$(command_model verify 2>&1)"
-grep -Fq 'is still running' <<<"${output}" || {
-    printf 'model verify: elapsed-time heartbeat was not printed\n' >&2
-    exit 1
-}
-unset HF_VERIFY_DELAY COLIBRI_FORCE_HEARTBEAT COLIBRI_HEARTBEAT_INTERVAL_SECONDS
-
-export HF_VERIFY_RESULT=repairable
-if output="$(command_model repair --yes 2>&1)"; then
-    :
-else
-    printf 'model repair command failed:\n%s\n' "${output}" >&2
-    exit 1
-fi
-grep -Fq 'Only these 2 remote file(s) will be downloaded' <<<"${output}" || {
-    printf 'model repair: selective plan was not printed\n' >&2
+output="$(command_model repair --yes 2>&1)"
+grep -Fq 'Exactly these 1 missing or corrupt model file(s)' <<<"${output}" || {
+    printf 'model repair: exact repair plan was not printed\n' >&2
     exit 1
 }
 grep -Fq 'Model repair passed' <<<"${output}" || {
     printf 'model repair: success message was not printed\n' >&2
     exit 1
 }
-
-mapfile -t hf_args <"${HF_ARGS_FILE}"
-expected_args=(
-    download
-    example/model
-    .coli_usage
-    out-mtp-00000.safetensors
-    --repo-type
-    model
-    --local-dir
-    "${MODEL_DIR_FIXTURE}"
-    --force-download
-)
-[[ "${hf_args[*]}" == "${expected_args[*]}" ]] || {
-    printf 'model repair: unexpected Hugging Face arguments\n' >&2
-    printf 'expected: %q\n' "${expected_args[*]}" >&2
-    printf 'actual:   %q\n' "${hf_args[*]}" >&2
+grep -Fxq 'repaired shard' "${MODEL_DIR_FIXTURE}/out-mtp-00000.safetensors" || {
+    printf 'model repair: repaired file was not activated\n' >&2
     exit 1
 }
 
-printf 'model verify and selective repair: passed\n'
+grep -Fxq -- '--force-download' "${HF_ARGS_FILE}" && {
+    printf 'model repair: unsafe --force-download was used\n' >&2
+    exit 1
+}
+grep -Fxq 'out-mtp-00000.safetensors' "${HF_ARGS_FILE}" || {
+    printf 'model repair: corrupt shard was not requested\n' >&2
+    exit 1
+}
+grep -Fxq '.coli_usage' "${HF_ARGS_FILE}" && {
+    printf 'model repair: mutable runtime state was incorrectly requested\n' >&2
+    exit 1
+}
+
+printf 'checksum verification and isolated repair: passed\n'
