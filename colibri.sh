@@ -1012,7 +1012,9 @@ extract_model_repair_targets() {
             next
         }
         section == "missing" && /^  - / {
-            print substr($0, 5)
+            if (substr($0, 5) != ".coli_usage") {
+                print substr($0, 5)
+            }
             next
         }
         /^[^[:space:]]/ {
@@ -1043,7 +1045,9 @@ has_only_mutable_usage_mismatch() {
             next
         }
         section == "missing" && /^  - / {
-            significant_count++
+            if (substr($0, 5) != ".coli_usage") {
+                significant_count++
+            }
             next
         }
         /^[^[:space:]]/ {
@@ -1079,7 +1083,7 @@ run_model_integrity() {
         cat -- "${output_file}"
     elif has_only_mutable_usage_mismatch "${output_file}"; then
         grep '^Warning:' "${output_file}" || true
-        warn "Skipping the expected .coli_usage checksum difference; Colibri updates this learning profile during normal use."
+        warn "Skipping .coli_usage because Colibri owns and may recreate this runtime file."
         status=0
     else
         cat -- "${output_file}" >&2
@@ -2121,7 +2125,7 @@ command_model() {
                 die "Model verification failed. Review the missing-file or checksum details above."
             fi
             rm -f -- "${verification_output}"
-            info "Model verification passed: all immutable repository files are present and match."
+            info "Model verification passed: all repository model files are present and match."
             ;;
         repair)
             load_config
@@ -2191,9 +2195,9 @@ command_model() {
             mapfile -t repair_files <"${repair_list}"
             rm -f -- "${repair_list}"
             ((${#repair_files[@]} > 0)) ||
-                die "Verification failed without identifying a safe repair target."
+                die "Verification failed without identifying a safe model-file repair target."
 
-            printf '\nOnly these %d remote file(s) will be downloaded:\n' \
+            printf '\nExactly these %d missing or corrupt model file(s) will be repaired:\n' \
                 "${#repair_files[@]}"
             local repair_file
             for repair_file in "${repair_files[@]}"; do
@@ -2207,19 +2211,46 @@ command_model() {
                 die "Colibri is running. Stop it with './colibri.sh stop' before replacing model files."
             fi
 
-            confirm "Download and replace only the listed file(s)?" no ||
+            confirm "Download and atomically repair only the listed file(s)?" no ||
                 die "Model repair cancelled."
 
-            info "Downloading only the missing or corrupted files"
+            local repair_stage
+            local repair_backup
+            repair_stage="$(mktemp -d "$(dirname -- "${destination}")/.colibri-repair.XXXXXX")"
+            repair_backup="${repair_stage}/.original"
+            mkdir -p -- "${repair_backup}"
+
+            info "Downloading the exact repair list into an isolated staging directory"
+            printf 'Hugging Face may display many transfer chunks for one large file; the file list above is the complete repair scope.\n'
             if ! HF_HUB_DISABLE_TELEMETRY=1 \
                 "${HF_VENV_DIR}/bin/hf" download \
                     "${repo}" \
                     "${repair_files[@]}" \
                     --repo-type model \
-                    --local-dir "${destination}" \
-                    --force-download; then
-                die "Selective model download failed. Re-run the same repair command to resume."
+                    --local-dir "${repair_stage}"; then
+                rm -rf --one-file-system -- "${repair_stage}"
+                die "Staged repair download failed. The live model directory was not changed."
             fi
+
+            for repair_file in "${repair_files[@]}"; do
+                [[ -s "${repair_stage}/${repair_file}" ]] || {
+                    rm -rf --one-file-system -- "${repair_stage}"
+                    die "Hugging Face did not produce the requested repair file: ${repair_file}"
+                }
+            done
+
+            info "Activating only the verified repair list"
+            for repair_file in "${repair_files[@]}"; do
+                mkdir -p -- \
+                    "${repair_backup}/$(dirname -- "${repair_file}")" \
+                    "${destination}/$(dirname -- "${repair_file}")"
+                if [[ -e "${destination}/${repair_file}" ]]; then
+                    mv -- "${destination}/${repair_file}" \
+                        "${repair_backup}/${repair_file}"
+                fi
+                mv -- "${repair_stage}/${repair_file}" \
+                    "${destination}/${repair_file}"
+            done
 
             info "Re-verifying the complete model after repair"
             verification_output="$(mktemp)"
@@ -2228,10 +2259,21 @@ command_model() {
                 "${destination}" \
                 "${verification_output}"; then
                 rm -f -- "${verification_output}"
-                die "Repair downloads completed, but model verification still fails."
+                warn "Post-repair verification failed. Restoring every original file."
+                for repair_file in "${repair_files[@]}"; do
+                    rm -f -- "${destination}/${repair_file}"
+                    if [[ -e "${repair_backup}/${repair_file}" ]]; then
+                        mkdir -p -- "${destination}/$(dirname -- "${repair_file}")"
+                        mv -- "${repair_backup}/${repair_file}" \
+                            "${destination}/${repair_file}"
+                    fi
+                done
+                rm -rf --one-file-system -- "${repair_stage}"
+                die "Repair was rolled back; the original local model files were restored."
             fi
             rm -f -- "${verification_output}"
-            info "Model repair passed: all immutable repository files are present and match."
+            rm -rf --one-file-system -- "${repair_stage}"
+            info "Model repair passed. Only the listed missing or corrupt files were changed."
             ;;
         status)
             [[ -x "${DOWNLOAD_SCRIPT}" ]] || die "Download helper is missing."
