@@ -144,8 +144,7 @@ grep -Fq 'Existing model verification passed' <<<"${model_repository_output}" ||
     printf 'install readiness: authoritative verification was not accepted\n' >&2
     exit 1
 }
-MODEL_DIR="${MODEL_DIR_FIXTURE}"
-model_is_ready || {
+MODEL_DIR="${MODEL_DIR_FIXTURE}" model_is_ready || {
     printf 'install readiness: valid non-indexed shard layout was rejected\n' >&2
     exit 1
 }
