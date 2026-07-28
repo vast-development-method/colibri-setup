@@ -55,11 +55,11 @@ profile. It displays the resolved plan and asks for confirmation before
 making changes:
 
 ```bash
-./colibri.sh install \
-    --port 11435 \
-    --profile balanced \
-    --ui api-only
+./colibri.sh install
 ```
+
+The defaults are port `11435`, the `performance` profile, and the
+`colibri-web` dashboard.
 
 If the model is absent, installation offers to start the resumable download.
 Hugging Face token management and the optional second-NVMe mirror remain
