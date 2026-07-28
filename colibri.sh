@@ -499,7 +499,7 @@ total_ram_gb() {
 }
 
 available_ram_gb() {
-    awk '/^MemAvailable:/ { printf "%d\\n", $2 / 1024 / 1024 }' /proc/meminfo
+    awk '/^MemAvailable:/ { printf "%d\n", $2 / 1024 / 1024 }' /proc/meminfo
 }
 
 logical_cpu_count() {
