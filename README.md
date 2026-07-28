@@ -410,6 +410,10 @@ Preview and confirm the non-destructive uninstall:
 ./colibri.sh uninstall
 ```
 
+The command is idempotent. After a failed first installation it removes any
+positively identified managed artifacts, or reports success when transactional
+cleanup already left nothing installed.
+
 Model deletion is deliberately not implemented. If model weights must ever be
 removed, verify the exact paths and handle that as a separate manual storage
 operation.
