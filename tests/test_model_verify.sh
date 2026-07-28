@@ -27,6 +27,8 @@ REPAIRED_SHA256="$(
 readonly MODEL_DIR_FIXTURE HF_ARGS_FILE REPAIRED_CONTENT REPAIRED_SHA256
 mkdir -p -- "${MODEL_DIR_FIXTURE}"
 printf 'original broken shard\n' >"${MODEL_DIR_FIXTURE}/out-mtp-00000.safetensors"
+printf '{}\n' >"${MODEL_DIR_FIXTURE}/config.json"
+printf '{}\n' >"${MODEL_DIR_FIXTURE}/tokenizer.json"
 
 cat >"${XDG_DATA_HOME}/colibri-setup/hf-venv/bin/hf" <<'EOF'
 #!/usr/bin/env bash
@@ -135,6 +137,33 @@ printf 'HF_TOKEN=%s\n' "${HF_EXPECT_TOKEN}" \
 chmod 600 "${XDG_CONFIG_HOME}/colibri-setup/.env"
 
 export HF_VERIFY_RESULT=success
+model_repository_output="$(
+    model_repository_is_verified         "${MODEL_REPO}"         "${MODEL_DIR_FIXTURE}"
+)"
+grep -Fq 'Existing model verification passed' <<<"${model_repository_output}" || {
+    printf 'install readiness: authoritative verification was not accepted\n' >&2
+    exit 1
+}
+model_is_ready || {
+    printf 'install readiness: valid non-indexed shard layout was rejected\n' >&2
+    exit 1
+}
+install_function="$(
+    sed -n '/^command_install() {/,/^command_configure() {/p'         "${REPOSITORY_ROOT}/colibri.sh"
+)"
+grep -Fq 'model_repository_is_verified' <<<"${install_function}" || {
+    printf 'install readiness: install does not use authoritative verification\n' >&2
+    exit 1
+}
+if grep -Fq 'if model_is_ready' <<<"${install_function}"; then
+    printf 'install readiness: install still uses the legacy heuristic decision\n' >&2
+    exit 1
+fi
+grep -Fq 'No full model download was started or offered.' <<<"${install_function}" || {
+    printf 'install readiness: existing failed models can still reach a full download\n' >&2
+    exit 1
+}
+
 output="$(command_model verify)"
 grep -Fq 'Model verification passed' <<<"${output}" || {
     printf 'model verify: success message was not printed\n' >&2
