@@ -62,19 +62,16 @@ assert_profile 48 46 performance 36
 assert_profile 48 46 balanced 33
 assert_profile 48 46 conservative 24
 
-# Custom allocations cannot bypass the 80% ceiling.
+# Custom allocations use explicit validated inputs and cannot bypass the
+# 80% ceiling. This avoids exporting mutable profile state into subprocesses.
 TEST_TOTAL_RAM="62"
 TEST_AVAILABLE_RAM="50"
-CUSTOM_RAM="41"
-CUSTOM_CTX="8192"
-CUSTOM_WORKERS="8"
-if (resolve_profile custom >/dev/null 2>&1); then
+if (resolve_profile custom 41 8192 8 >/dev/null 2>&1); then
     printf 'profile test: unsafe custom RAM budget was accepted\n' >&2
     exit 1
 fi
 
-CUSTOM_RAM="40"
-resolve_profile custom
+resolve_profile custom 40 8192 8
 [[ "${RAM_GB}" == "40" ]] || {
     printf 'profile test: safe custom RAM budget was rejected\n' >&2
     exit 1
