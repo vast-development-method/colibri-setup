@@ -27,11 +27,6 @@ assert_profile() {
     local expected_ram=$3
 
     TEST_TOTAL_RAM="${total_ram}"
-    RAM_GB=""
-    CTX=""
-    PIPE_WORKERS=""
-    PIN_GB=""
-    MAX_QUEUE=""
     resolve_profile "${profile}"
 
     if [[ "${RAM_GB}" != "${expected_ram}" ]]; then
