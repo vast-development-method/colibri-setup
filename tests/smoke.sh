@@ -49,6 +49,16 @@ grep -Fq '11435' <<<"${help_output}" || {
     exit 1
 }
 
+grep -Fq 'Profile:      performance' <<<"${help_output}" || {
+    printf 'smoke: help does not report the default performance profile\n' >&2
+    exit 1
+}
+
+grep -Fq 'UI:           colibri-web' <<<"${help_output}" || {
+    printf 'smoke: help does not report the default Colibri dashboard\n' >&2
+    exit 1
+}
+
 for mode in open-webui colibri-web api-only; do
     grep -Fq "${mode}" <<<"${help_output}" || {
         printf 'smoke: help does not report UI mode: %s\n' "${mode}" >&2
