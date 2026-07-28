@@ -11,6 +11,15 @@ readonly REPOSITORY_ROOT
 # shellcheck source=../colibri.sh
 source "${REPOSITORY_ROOT}/colibri.sh"
 
+node_version_supports_colibri_web "v20.19.0"
+node_version_supports_colibri_web "20.20.1"
+node_version_supports_colibri_web "v22.12.0"
+node_version_supports_colibri_web "v24.1.0"
+! node_version_supports_colibri_web "v18.19.1"
+! node_version_supports_colibri_web "v20.18.3"
+! node_version_supports_colibri_web "v22.11.0"
+! node_version_supports_colibri_web "not-a-version"
+
 fixture_root="$(mktemp -d)"
 trap 'rm -rf -- "${fixture_root}"' EXIT
 SOURCE_DIR="${fixture_root}/upstream"
