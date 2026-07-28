@@ -756,6 +756,18 @@ write_manifest() {
     trap - RETURN
 }
 
+any_path_exists() {
+    local path
+    for path in "$@"; do
+        [[ ! -e "${path}" ]] || return 0
+    done
+    return 1
+}
+
+managed_installation_artifacts_exist() {
+    any_path_exists "${SERVICE_FILE}" "${CONFIG_FILE}" "${INSTALLED_WAIT_SCRIPT}"
+}
+
 service_exec_subcommand() {
     if [[ "${UI_MODE}" == "colibri-web" ]]; then
         printf 'web\n'
@@ -1993,6 +2005,9 @@ command_install() {
     # Keep an existing healthy service alive while dependencies and a complete
     # staged release are prepared. The live source path is not touched until
     # the service has stopped for the atomic activation.
+    # Record ownership before any fallible package or build operation so a
+    # partial first installation remains safely uninstallable.
+    write_manifest
     install_dependencies
     prepare_staged_source "${UPSTREAM_REF}" "${UPDATE_SOURCE}"
     build_colibri "${STAGED_SOURCE_DIR}"
@@ -3030,8 +3045,14 @@ command_cli() {
 command_uninstall() {
     require_non_root
     acquire_lock
-    [[ -r "${INSTALL_MANIFEST}" ]] ||
-        die "No colibri-setup install manifest exists; refusing to remove global service files."
+    if [[ ! -r "${INSTALL_MANIFEST}" ]]; then
+        if managed_installation_artifacts_exist; then
+            die "Managed-looking installation artifacts exist without an install manifest; refusing an unproven removal."
+        fi
+        info "Colibri integration is already uninstalled; no managed installation artifacts remain."
+        printf 'Model files were not changed.\n'
+        return 0
+    fi
     load_config
     local remove_source="0"
     local purge_config="0"
