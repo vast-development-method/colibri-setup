@@ -59,12 +59,19 @@ EOF
 cat >"${TEST_SOURCE_DIR}/c/setup.sh" <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
+[[ "${ARCH:-}" == "native" ]]
+[[ "${CUDA:-}" == "0" ]]
+[[ "${CUDA_DLL:-}" == "0" ]]
+[[ "${HIP:-}" == "0" ]]
+[[ "${METAL:-}" == "0" ]]
 if [[ "${FAIL_STAGED_BUILD:-0}" == "1" ]]; then
     exit 23
 fi
 printf 'generated build configuration\n' >.build-config
 printf '#!/usr/bin/env bash\nexit 0\n' >coli
-printf '#!/usr/bin/env bash\nexit 0\n' >colibri
+printf 'int main(void) { return 0; }\n' >colibri.c
+gcc colibri.c -o colibri
+rm -f -- colibri.c
 chmod +x coli colibri
 EOF
 chmod +x "${TEST_SOURCE_DIR}/c/setup.sh"
@@ -88,6 +95,7 @@ fi
 git -C "${TEST_SOURCE_DIR}" diff --quiet
 git -C "${TEST_SOURCE_DIR}" diff --cached --quiet
 
-"${BASH}" "${BASH_SOURCE[0]}" activation-worker
+CUDA=1 CUDA_DLL=1 HIP=1 METAL=1 \
+    "${BASH}" "${BASH_SOURCE[0]}" activation-worker
 
 printf 'staged source tests: passed\n'

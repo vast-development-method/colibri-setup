@@ -8,8 +8,8 @@ when the GPU is disabled.
 ## Profiles
 
 The setup provides CPU/NVMe profiles. Exact values are calculated from
-the host at installation time rather than encoding one person's hardware in
-the repository.
+the host at installation time and again before starting a stopped service,
+rather than encoding one person's hardware in the repository.
 
 | Profile | Goal | RAM approach | Context/queue approach |
 | --- | --- | --- | --- |
@@ -27,10 +27,13 @@ Select a profile:
 ./colibri.sh plan
 ```
 
-Every managed build is compiled without CUDA, and the generated environment
-sets `COLI_GPU=none`. This leaves the GPU available for another runtime while
-preserving Colibri's CPU/OpenMP tuning path. Check the effective plan before
-starting:
+Every managed build explicitly forces CUDA, ROCm/HIP, and Metal off. The
+generated environment contains no GPU selector, and the systemd unit removes
+any inherited GPU backend variables before launch. This leaves the GPU
+available for another runtime while preserving Colibri's CPU/OpenMP
+auto-tuning path. `COLI_GPU=none` must not be used: upstream interprets
+`COLI_GPU` as a device selector, so its mere presence requests a GPU backend.
+Check the effective plan before starting:
 
 ```bash
 ./colibri.sh doctor
@@ -39,9 +42,11 @@ starting:
 
 ## CPU and memory
 
-Colibri's `RAM_GB` budget is an expert cache budget, not the total memory the
-process can ever consume. Dense weights, KV contexts, mappings, Python, the
-operating system, Open WebUI, and other services need additional memory.
+Colibri's `RAM_GB` value is the upstream engine's projected memory envelope,
+including resident tensors, expert cache, working memory, KV memory, and its
+runtime reserve. The wrapper, operating system, Open WebUI, and other services
+still live outside that engine envelope. Managed profiles therefore cap the
+engine at 80% of both installed and currently available RAM when resolved.
 
 Use these host checks while testing:
 
@@ -59,7 +64,7 @@ The wrapper keeps GPU off in this deployment:
 
 ```text
 CPU-only Colibri binary
-COLI_GPU=none
+COLI_CUDA, COLI_GPU, COLI_GPUS, CUDA_DENSE, CUDA_EXPERT_GB, and COLI_METAL unset
 ```
 
 Do not set CUDA or VRAM expert variables in the generated environment unless

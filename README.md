@@ -6,19 +6,23 @@ available for another inference runtime.
 
 This toolkit turns Colibri into an operator-friendly service:
 
-- builds a CPU-native Colibri binary and rejects accidental CUDA linkage;
+- builds a CPU-native Colibri binary, rejects CUDA/ROCm linkage, and removes
+  inherited GPU backend selectors from the managed runtime;
 - pins the default installation to upstream **Colibri v1.1.1**;
 - uses the ready-to-run
   [`mastouri/GLM-5.2-colibri-int4-g64-with-int8-mtp`](https://huggingface.co/mastouri/GLM-5.2-colibri-int4-g64-with-int8-mtp)
   `gs64` model by default—no conversion step is required;
 - downloads hundreds of gigabytes resumably in a detached GNU Screen session;
 - calculates conservative through experimental resource profiles from the
-  current host instead of embedding one machine's specifications;
+  current host, enforces an 80% RAM ceiling, and refreshes stopped-service
+  profiles before startup instead of embedding one machine's specifications;
 - can spread expert reads over two **physical** NVMe drives using a validated
   model mirror;
 - offers Open WebUI-only, Colibri dashboard, and API-only modes;
 - manages lifecycle, diagnostics, logs, credentials, upgrades, and the full
   upstream `coli` CLI through one entry point;
+- verifies that start/restart survives early engine initialization and limits
+  deterministic systemd restart storms;
 - always preserves model weights during stop and uninstall operations.
 
 The default listener is `127.0.0.1:11435`, avoiding Colibri's common example
@@ -266,9 +270,13 @@ code, tickets, logs, screenshots, or shell history. The wrapper's
 
 ## Resource profiles
 
-Profiles are calculated from detected logical CPUs and total memory. The RAM
-figure is Colibri's expert-cache budget—not the total memory the process and
-host can consume.
+Profiles are calculated from detected logical CPUs, installed memory, and
+currently available memory. The RAM figure is Colibri's engine budget: upstream
+uses it to bound resident tensors, expert cache, working memory, KV memory, and
+runtime reserve. It is not merely an expert-cache setting. No managed profile
+may exceed 80% of installed or currently available RAM when it is resolved.
+Named profiles are resolved again before starting a stopped service so stale
+installation-time availability cannot silently overcommit the host.
 
 | Profile | Use case | Resource behavior |
 | --- | --- | --- |
@@ -290,11 +298,12 @@ Inspect and change profiles:
 
 An active service is restarted after a profile change unless
 `--no-restart` is supplied. Every profile keeps the engine CPU-only and the
-GPU reserved:
+GPU reserved. The service explicitly removes inherited CUDA, ROCm device, and
+Metal selectors before launching the CPU binary:
 
 ```text
 CPU-only Colibri build
-COLI_GPU=none
+GPU backend variables absent
 ```
 
 The installer starts with `performance`. Move down to `balanced` or
