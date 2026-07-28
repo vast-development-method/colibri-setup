@@ -498,6 +498,10 @@ total_ram_gb() {
     awk '/^MemTotal:/ { printf "%d\n", $2 / 1024 / 1024 }' /proc/meminfo
 }
 
+available_ram_gb() {
+    awk '/^MemAvailable:/ { printf "%d\\n", $2 / 1024 / 1024 }' /proc/meminfo
+}
+
 logical_cpu_count() {
     getconf _NPROCESSORS_ONLN 2>/dev/null || nproc
 }
@@ -515,16 +519,27 @@ min_int() {
 resolve_profile() {
     local requested_profile=$1
     local total_ram
+    local available_ram
+    local safe_ram_ceiling
     local cpus
     local percent
     local reserve
-    local max_ram=0
 
     validate_profile_name "${requested_profile}"
     total_ram="$(total_ram_gb)"
+    available_ram="$(available_ram_gb)"
     cpus="$(logical_cpu_count)"
     ((total_ram >= 16)) ||
         die "Colibri needs at least approximately 16 GiB RAM. Detected ${total_ram} GiB."
+    ((available_ram >= 16)) ||
+        die "Colibri needs at least approximately 16 GiB currently available RAM. Detected ${available_ram} GiB."
+
+    # Absolute safety contract: no profile may allocate more than 80% of
+    # installed RAM or 80% of the RAM currently available to the host.
+    safe_ram_ceiling="$((total_ram * 80 / 100))"
+    if ((safe_ram_ceiling > available_ram * 80 / 100)); then
+        safe_ram_ceiling="$((available_ram * 80 / 100))"
+    fi
 
     case "${requested_profile}" in
         conservative)
@@ -554,7 +569,6 @@ resolve_profile() {
         performance)
             percent=80
             reserve=8
-            max_ram=44
             CTX="8192"
             PIPE_WORKERS="$(min_int "${cpus}" 12)"
             PIN_GB="14"
@@ -567,7 +581,6 @@ resolve_profile() {
         experimental)
             percent=80
             reserve=8
-            max_ram=44
             CTX="8192"
             PIPE_WORKERS="$(min_int "${cpus}" 12)"
             PIN_GB="14"
@@ -583,7 +596,7 @@ resolve_profile() {
             CUSTOM_WORKERS="${CUSTOM_WORKERS:-${PIPE_WORKERS:-}}"
             [[ -n "${CUSTOM_RAM}" && -n "${CUSTOM_CTX}" && -n "${CUSTOM_WORKERS}" ]] ||
                 die "The custom profile requires --ram, --ctx, and --workers."
-            validate_integer "${CUSTOM_RAM}" "RAM budget" 16 "${total_ram}"
+            validate_integer "${CUSTOM_RAM}" "RAM budget" 16 "${safe_ram_ceiling}"
             validate_integer "${CUSTOM_CTX}" "Context" 512 131072
             validate_integer "${CUSTOM_WORKERS}" "Worker count" 1 64
             RAM_GB="${CUSTOM_RAM}"
@@ -605,11 +618,11 @@ resolve_profile() {
     if ((RAM_GB > total_ram - reserve)); then
         RAM_GB="$((total_ram - reserve))"
     fi
-    if ((max_ram > 0 && RAM_GB > max_ram)); then
-        RAM_GB="${max_ram}"
+    if ((RAM_GB > safe_ram_ceiling)); then
+        RAM_GB="${safe_ram_ceiling}"
     fi
     ((RAM_GB >= 16)) ||
-        die "Profile '${requested_profile}' leaves too little RAM for Colibri on this host."
+        die "Profile '${requested_profile}' leaves too little currently available RAM for Colibri."
     PROFILE="${requested_profile}"
 }
 
