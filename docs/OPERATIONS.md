@@ -48,8 +48,13 @@ Follow service logs until interrupted:
 ```
 
 The first start can remain quiet for several minutes while the model loads.
-Use `status`, `logs --follow`, and `test` before treating that startup time
-as a failure.
+Before reporting success, the wrapper checks that the process remains active
+and has not automatically restarted during an initial five-second guard.
+This catches configuration and engine-contract failures without waiting for
+the several-minute model load or `/health`. The systemd unit permits only
+three restart attempts within five minutes, preventing an invalid
+configuration from looping forever. Use `status`, `logs --follow`, and `test`
+to follow normal loading after the early guard passes.
 
 ## Installation and reconfiguration
 

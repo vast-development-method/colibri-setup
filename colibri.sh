@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 
 readonly PROGRAM_NAME="colibri.sh"
-readonly PROGRAM_VERSION="0.1.1"
+readonly PROGRAM_VERSION="0.1.2"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly SCRIPT_DIR
 readonly UPSTREAM_URL="https://github.com/JustVugg/colibri.git"
@@ -180,7 +180,11 @@ release_cleanup() {
     if ((exit_code != 0)) && [[ "${ACTIVATION_NEEDS_ROLLBACK}" == "1" ]]; then
         # A first install may have partially started the candidate even though
         # no service was active before activation.
-        sudo systemctl stop "${SERVICE_NAME}" >/dev/null 2>&1
+        if [[ "${ACTIVATION_HAD_PREVIOUS}" == "1" ]]; then
+            sudo systemctl stop "${SERVICE_NAME}" >/dev/null 2>&1
+        else
+            sudo systemctl disable --now "${SERVICE_NAME}" >/dev/null 2>&1
+        fi
         rollback_activated_source
     fi
 
@@ -693,6 +697,58 @@ generate_api_key() {
     openssl rand -hex 32
 }
 
+render_config() {
+    printf 'DEPLOY_USER=%s\n' "${DEPLOY_USER}"
+    printf 'DEPLOY_GROUP=%s\n' "${DEPLOY_GROUP}"
+    printf 'SOURCE_DIR=%s\n' "${SOURCE_DIR}"
+    printf 'MODEL_DIR=%s\n' "${MODEL_DIR}"
+    printf 'MODEL_REPO=%s\n' "${MODEL_REPO}"
+    printf 'MODEL_ID=%s\n' "${MODEL_ID}"
+    printf 'MIRROR_DIR=%s\n' "${MIRROR_DIR}"
+    printf 'UPSTREAM_REF=%s\n' "${UPSTREAM_REF}"
+    printf 'SOURCE_CREATED=%s\n' "${SOURCE_CREATED}"
+    printf 'BIND_HOST=%s\n' "${BIND_HOST}"
+    printf 'PORT=%s\n' "${PORT}"
+    printf 'PROFILE=%s\n' "${PROFILE}"
+    printf 'RAM_GB=%s\n' "${RAM_GB}"
+    printf 'CTX=%s\n' "${CTX}"
+    printf 'PIPE_WORKERS=%s\n' "${PIPE_WORKERS}"
+    printf 'PIN_GB=%s\n' "${PIN_GB}"
+    printf 'MAX_QUEUE=%s\n' "${MAX_QUEUE}"
+    printf 'QUEUE_TIMEOUT=%s\n' "${QUEUE_TIMEOUT}"
+    printf 'KV_SLOTS=%s\n' "${KV_SLOTS}"
+    printf 'DIRECT=%s\n' "${DIRECT}"
+    printf 'URING=%s\n' "${URING}"
+    printf 'PILOT=%s\n' "${PILOT}"
+    printf 'PILOT_REAL=%s\n' "${PILOT_REAL}"
+    printf 'UI_MODE=%s\n' "${UI_MODE}"
+    printf 'COLI_API_KEY=%s\n' "${COLI_API_KEY}"
+    printf 'COLI_MODEL=%s\n' "${MODEL_DIR}"
+    printf 'COLI_MODEL_ID=%s\n' "${MODEL_ID}"
+    printf 'COLI_MODEL_MIRROR=%s\n' "${MIRROR_DIR}"
+    # Do not emit GPU backend variables. COLI_GPU/COLI_GPUS select device
+    # ordinals in upstream Colibri; even COLI_GPU=none is treated as a CUDA
+    # request by a CPU-only engine.
+    printf 'COLI_POLICY=quality\n'
+    printf 'COLI_MAX_QUEUE=%s\n' "${MAX_QUEUE}"
+    printf 'COLI_QUEUE_TIMEOUT=%s\n' "${QUEUE_TIMEOUT}"
+    printf 'COLI_KV_SLOTS=%s\n' "${KV_SLOTS}"
+    printf 'PIPE=1\n'
+    printf 'PIPE_WORKERS=%s\n' "${PIPE_WORKERS}"
+    printf 'DIRECT=%s\n' "${DIRECT}"
+    printf 'URING=%s\n' "${URING}"
+    printf 'PILOT=%s\n' "${PILOT}"
+    printf 'PILOT_REAL=%s\n' "${PILOT_REAL}"
+    printf 'PIN=auto\n'
+    printf 'PIN_GB=%s\n' "${PIN_GB}"
+    printf 'AUTOPIN=1\n'
+    printf 'KVSAVE=1\n'
+    printf 'COLI_TOOL_SALVAGE=1\n'
+    printf 'PROF=1\n'
+    printf 'RAM_GB=%s\n' "${RAM_GB}"
+    printf 'CTX=%s\n' "${CTX}"
+}
+
 write_config() {
     assert_config_permissions
     validate_managed_path_separation
@@ -717,55 +773,7 @@ write_config() {
     temp_file="$(mktemp)"
     trap 'rm -f -- "${temp_file:-}"' RETURN
 
-    {
-        printf 'DEPLOY_USER=%s\n' "${DEPLOY_USER}"
-        printf 'DEPLOY_GROUP=%s\n' "${DEPLOY_GROUP}"
-        printf 'SOURCE_DIR=%s\n' "${SOURCE_DIR}"
-        printf 'MODEL_DIR=%s\n' "${MODEL_DIR}"
-        printf 'MODEL_REPO=%s\n' "${MODEL_REPO}"
-        printf 'MODEL_ID=%s\n' "${MODEL_ID}"
-        printf 'MIRROR_DIR=%s\n' "${MIRROR_DIR}"
-        printf 'UPSTREAM_REF=%s\n' "${UPSTREAM_REF}"
-        printf 'SOURCE_CREATED=%s\n' "${SOURCE_CREATED}"
-        printf 'BIND_HOST=%s\n' "${BIND_HOST}"
-        printf 'PORT=%s\n' "${PORT}"
-        printf 'PROFILE=%s\n' "${PROFILE}"
-        printf 'RAM_GB=%s\n' "${RAM_GB}"
-        printf 'CTX=%s\n' "${CTX}"
-        printf 'PIPE_WORKERS=%s\n' "${PIPE_WORKERS}"
-        printf 'PIN_GB=%s\n' "${PIN_GB}"
-        printf 'MAX_QUEUE=%s\n' "${MAX_QUEUE}"
-        printf 'QUEUE_TIMEOUT=%s\n' "${QUEUE_TIMEOUT}"
-        printf 'KV_SLOTS=%s\n' "${KV_SLOTS}"
-        printf 'DIRECT=%s\n' "${DIRECT}"
-        printf 'URING=%s\n' "${URING}"
-        printf 'PILOT=%s\n' "${PILOT}"
-        printf 'PILOT_REAL=%s\n' "${PILOT_REAL}"
-        printf 'UI_MODE=%s\n' "${UI_MODE}"
-        printf 'COLI_API_KEY=%s\n' "${COLI_API_KEY}"
-        printf 'COLI_MODEL=%s\n' "${MODEL_DIR}"
-        printf 'COLI_MODEL_ID=%s\n' "${MODEL_ID}"
-        printf 'COLI_MODEL_MIRROR=%s\n' "${MIRROR_DIR}"
-        printf 'COLI_GPU=none\n'
-        printf 'COLI_POLICY=quality\n'
-        printf 'COLI_MAX_QUEUE=%s\n' "${MAX_QUEUE}"
-        printf 'COLI_QUEUE_TIMEOUT=%s\n' "${QUEUE_TIMEOUT}"
-        printf 'COLI_KV_SLOTS=%s\n' "${KV_SLOTS}"
-        printf 'PIPE=1\n'
-        printf 'PIPE_WORKERS=%s\n' "${PIPE_WORKERS}"
-        printf 'DIRECT=%s\n' "${DIRECT}"
-        printf 'URING=%s\n' "${URING}"
-        printf 'PILOT=%s\n' "${PILOT}"
-        printf 'PILOT_REAL=%s\n' "${PILOT_REAL}"
-        printf 'PIN=auto\n'
-        printf 'PIN_GB=%s\n' "${PIN_GB}"
-        printf 'AUTOPIN=1\n'
-        printf 'KVSAVE=1\n'
-        printf 'COLI_TOOL_SALVAGE=1\n'
-        printf 'PROF=1\n'
-        printf 'RAM_GB=%s\n' "${RAM_GB}"
-        printf 'CTX=%s\n' "${CTX}"
-    } >"${temp_file}"
+    render_config >"${temp_file}"
 
     sudo install -d -m 0750 -o root -g "${DEPLOY_GROUP}" "${SYSTEM_CONFIG_DIR}"
     sudo install -m 0640 -o root -g "${DEPLOY_GROUP}" "${temp_file}" "${CONFIG_FILE}"
@@ -842,6 +850,8 @@ Documentation=https://github.com/JustVugg/colibri
 Wants=${docker_wants}
 After=network-online.target local-fs.target${docker_after}
 RequiresMountsFor=${MODEL_DIR}
+StartLimitIntervalSec=300
+StartLimitBurst=3
 
 [Service]
 Type=simple
@@ -850,6 +860,7 @@ Group=${DEPLOY_GROUP}
 WorkingDirectory=${working_dir}
 EnvironmentFile=${CONFIG_FILE}
 Environment=PYTHONUNBUFFERED=1
+UnsetEnvironment=COLI_CUDA COLI_GPU COLI_GPUS CUDA_DENSE CUDA_EXPERT_GB COLI_METAL
 ${bind_wait}
 ExecStart=${coli_path} ${subcommand} --model ${MODEL_DIR} --host ${BIND_HOST} --port ${PORT} --model-id ${MODEL_ID} --ram ${RAM_GB} --ctx ${CTX} --policy quality --max-queue ${MAX_QUEUE} --queue-timeout ${QUEUE_TIMEOUT} --kv-slots ${KV_SLOTS}$([[ "${subcommand}" == "web" ]] && printf ' --no-browser')
 Restart=on-failure
@@ -1685,16 +1696,16 @@ build_colibri() {
     info "Building a CPU-native Colibri binary"
     (
         cd -- "${checkout_dir}/c"
-        ARCH=native ./setup.sh
+        # Do not let an operator's shell environment silently turn this into a
+        # GPU build. These make variables are consumed by upstream setup.sh.
+        ARCH=native CUDA=0 CUDA_DLL=0 HIP=0 METAL=0 ./setup.sh
     )
 
     [[ -x "${checkout_dir}/c/colibri" ]] ||
         die "Colibri engine binary was not built."
     [[ -x "${checkout_dir}/c/coli" ]] || die "Colibri CLI was not found."
 
-    if ldd "${checkout_dir}/c/colibri" 2>/dev/null | grep -q 'libcudart'; then
-        die "The generated binary links CUDA. Refusing it because this deployment reserves the GPU for other workloads."
-    fi
+    assert_cpu_only_engine "${checkout_dir}/c/colibri"
 }
 
 node_version_supports_colibri_web() {
@@ -2010,7 +2021,176 @@ port_is_listening() {
     ss -H -ltn "sport = :${PORT}" 2>/dev/null | grep -q .
 }
 
+assert_cpu_only_engine() {
+    local engine_path=${1:-"${SOURCE_DIR}/c/colibri"}
+    local linked_libraries
+    local executable_magic
+
+    [[ -x "${engine_path}" ]] ||
+        die "Colibri engine is missing or not executable: ${engine_path}"
+    executable_magic="$(
+        od -An -tx1 -N4 -- "${engine_path}" |
+            tr -d '[:space:]'
+    )"
+    [[ "${executable_magic}" == "7f454c46" ]] ||
+        die "Colibri engine is not a Linux ELF executable: ${engine_path}"
+    linked_libraries="$(ldd "${engine_path}" 2>/dev/null || true)"
+    if grep -Eq 'libcudart|libamdhip64' <<<"${linked_libraries}"; then
+        die "Configured engine links a GPU runtime; this deployment requires a CPU-only build."
+    fi
+}
+
+config_file_has_gpu_backend_settings() {
+    local config_file=$1
+    grep -Eq \
+        '^(COLI_CUDA|COLI_GPU|COLI_GPUS|CUDA_DENSE|CUDA_EXPERT_GB|COLI_METAL)=' \
+        "${config_file}"
+}
+
+managed_config_has_gpu_backend_settings() {
+    config_file_has_gpu_backend_settings "${CONFIG_FILE}"
+}
+
+service_unit_file_has_cpu_runtime_contract() {
+    local service_file=$1
+    [[ -r "${service_file}" ]] || return 1
+    grep -Fqx \
+        'UnsetEnvironment=COLI_CUDA COLI_GPU COLI_GPUS CUDA_DENSE CUDA_EXPERT_GB COLI_METAL' \
+        "${service_file}"
+}
+
+service_unit_has_cpu_runtime_contract() {
+    service_unit_file_has_cpu_runtime_contract "${SERVICE_FILE}"
+}
+
+ensure_cpu_runtime_contract() {
+    local reinstall_unit="0"
+
+    if managed_config_has_gpu_backend_settings; then
+        warn "Migrating the legacy GPU environment out of the CPU-only configuration."
+        unset COLI_CUDA COLI_GPU COLI_GPUS CUDA_DENSE CUDA_EXPERT_GB COLI_METAL
+        write_config
+        reinstall_unit="1"
+    fi
+
+    if ! service_unit_has_cpu_runtime_contract; then
+        reinstall_unit="1"
+    fi
+
+    if [[ "${reinstall_unit}" == "1" ]]; then
+        install_service_unit
+    fi
+
+    managed_config_has_gpu_backend_settings &&
+        die "Managed configuration still contains GPU backend settings."
+    service_unit_has_cpu_runtime_contract ||
+        die "Managed service does not clear inherited GPU backend settings."
+}
+
+refresh_profile_before_start() {
+    local total_ram
+    local total_ceiling
+    local previous_values
+    local resolved_values
+
+    total_ram="$(total_ram_gb)"
+    total_ceiling="$((total_ram * 80 / 100))"
+    validate_integer "${RAM_GB}" "Configured RAM budget" 16 "${total_ceiling}"
+
+    # When the service is stopped, re-resolve named profiles against current
+    # hardware availability. An active Colibri process is itself consuming the
+    # budget, so MemAvailable cannot safely be used before an in-place restart.
+    if sudo systemctl is-active --quiet "${SERVICE_NAME}"; then
+        return 0
+    fi
+
+    previous_values="$(
+        printf '%s:%s:%s:%s:%s:%s:%s:%s:%s:%s\n' \
+            "${PROFILE}" "${RAM_GB}" "${CTX}" "${PIPE_WORKERS}" "${PIN_GB}" \
+            "${MAX_QUEUE}" "${DIRECT}" "${URING}" "${PILOT}" "${PILOT_REAL}"
+    )"
+    if [[ "${PROFILE}" == "custom" ]]; then
+        resolve_profile custom "${RAM_GB}" "${CTX}" "${PIPE_WORKERS}"
+    else
+        resolve_profile "${PROFILE}"
+    fi
+    resolved_values="$(
+        printf '%s:%s:%s:%s:%s:%s:%s:%s:%s:%s\n' \
+            "${PROFILE}" "${RAM_GB}" "${CTX}" "${PIPE_WORKERS}" "${PIN_GB}" \
+            "${MAX_QUEUE}" "${DIRECT}" "${URING}" "${PILOT}" "${PILOT_REAL}"
+    )"
+
+    if [[ "${resolved_values}" != "${previous_values}" ]]; then
+        info "Adapting the ${PROFILE} profile to current CPU/RAM availability"
+        show_profile_values
+        write_config
+        install_service_unit
+    fi
+}
+
+service_restart_count() {
+    local restart_count
+    restart_count="$(
+        sudo systemctl show \
+            --property=NRestarts \
+            --value \
+            "${SERVICE_NAME}" 2>/dev/null
+    )" || restart_count="0"
+    [[ "${restart_count}" =~ ^[0-9]+$ ]] || restart_count="0"
+    printf '%s\n' "${restart_count}"
+}
+
+show_startup_failure_context() {
+    error "Colibri did not survive its initial startup guard."
+    sudo systemctl status "${SERVICE_NAME}" --no-pager --full >&2 || true
+    sudo journalctl \
+        --unit "${SERVICE_NAME}" \
+        --no-pager \
+        --lines 60 >&2 || true
+}
+
+verify_service_survival() {
+    local baseline_restarts=$1
+    local guard_seconds=${COLIBRI_STARTUP_GUARD_SECONDS:-5}
+    local elapsed="0"
+    local current_restarts
+
+    validate_integer "${guard_seconds}" "Startup guard seconds" 1 60
+    while ((elapsed < guard_seconds)); do
+        sleep 1
+        elapsed=$((elapsed + 1))
+
+        current_restarts="$(service_restart_count)"
+        if ! sudo systemctl is-active --quiet "${SERVICE_NAME}" ||
+            ((current_restarts > baseline_restarts)); then
+            show_startup_failure_context
+            sudo systemctl stop "${SERVICE_NAME}" >/dev/null 2>&1 || true
+            die "Colibri exited or restarted during startup. The service was stopped to prevent a restart loop."
+        fi
+    done
+}
+
+checked_service_operation() {
+    local operation=$1
+    local baseline_restarts
+
+    case "${operation}" in
+        start | restart) ;;
+        *) die "Unsupported checked service operation: ${operation}" ;;
+    esac
+
+    sudo systemctl reset-failed "${SERVICE_NAME}" >/dev/null 2>&1 || true
+    baseline_restarts="$(service_restart_count)"
+    if ! sudo systemctl "${operation}" "${SERVICE_NAME}"; then
+        show_startup_failure_context
+        die "systemd could not ${operation} Colibri."
+    fi
+    verify_service_survival "${baseline_restarts}"
+}
+
 preflight_start() {
+    [[ -r "${CONFIG_FILE}" ]] ||
+        die "Managed configuration is missing: ${CONFIG_FILE}"
     load_config
     assert_service_owned_or_absent
     validate_source_checkout
@@ -2020,9 +2200,9 @@ preflight_start() {
     validate_port "${PORT}"
     validate_host "${BIND_HOST}"
 
-    if ldd "${SOURCE_DIR}/c/colibri" 2>/dev/null | grep -q 'libcudart'; then
-        die "Configured engine links CUDA; this CPU/NVMe deployment will not start it."
-    fi
+    assert_cpu_only_engine
+    ensure_cpu_runtime_contract
+    refresh_profile_before_start
 
     if ! sudo systemctl is-active --quiet "${SERVICE_NAME}" && port_is_listening; then
         die "Port ${PORT} is already in use. Choose another port with ./colibri.sh configure --port PORT."
@@ -2250,7 +2430,7 @@ command_configure() {
 
     if [[ "${was_active}" == "1" && "${NO_START}" == "0" ]]; then
         preflight_start
-        sudo systemctl restart "${SERVICE_NAME}"
+        checked_service_operation restart
     fi
     info "Configuration updated."
 }
@@ -2318,8 +2498,9 @@ command_start() {
     require_non_root
     acquire_lock
     preflight_start
-    sudo systemctl enable --now "${SERVICE_NAME}"
-    info "Colibri start requested."
+    checked_service_operation start
+    sudo systemctl enable "${SERVICE_NAME}"
+    info "Colibri started and passed the early-process survival check."
     printf 'Follow startup with: ./colibri.sh logs --follow\n'
     printf 'The first /health response appears only after the model has loaded.\n'
 }
@@ -2341,15 +2522,14 @@ command_restart() {
     require_non_root
     acquire_lock
     preflight_start
-    sudo systemctl restart "${SERVICE_NAME}"
-    info "Colibri restart requested."
+    checked_service_operation restart
+    info "Colibri restarted and passed the early-process survival check."
 }
 
 command_enable() {
     require_non_root
     acquire_lock
-    load_config
-    assert_service_owned_or_absent
+    preflight_start
     sudo systemctl enable "${SERVICE_NAME}"
     info "Colibri will start automatically at boot."
 }
@@ -2403,7 +2583,7 @@ command_status() {
 
     if [[ -x "${DOWNLOAD_SCRIPT}" ]]; then
         printf '\nBackground model jobs:\n'
-        "${DOWNLOAD_SCRIPT}" status --all --quiet || true
+        "${DOWNLOAD_SCRIPT}" status || true
     fi
     if [[ -x "${MIRROR_SCRIPT}" ]]; then
         printf '\nBackground mirror jobs:\n'
@@ -2458,8 +2638,9 @@ command_doctor() {
     if [[ ! -x "${SOURCE_DIR}/c/colibri" ]]; then
         error "Missing Colibri engine: ${SOURCE_DIR}/c/colibri"
         failures=$((failures + 1))
-    elif ldd "${SOURCE_DIR}/c/colibri" 2>/dev/null | grep -q 'libcudart'; then
-        error "Engine links CUDA; this deployment must remain CPU-only."
+    elif ! (
+        assert_cpu_only_engine "${SOURCE_DIR}/c/colibri"
+    ); then
         failures=$((failures + 1))
     else
         printf 'CPU-only engine: OK\n'
@@ -2489,7 +2670,7 @@ command_doctor() {
     (
         export COLI_MODEL="${MODEL_DIR}"
         export COLI_MODEL_MIRROR="${MIRROR_DIR}"
-        export COLI_GPU=none
+        unset COLI_CUDA COLI_GPU COLI_GPUS CUDA_DENSE CUDA_EXPERT_GB COLI_METAL
         export RAM_GB CTX PIPE_WORKERS DIRECT URING PILOT PILOT_REAL
         cd -- "${SOURCE_DIR}/c"
         ./coli doctor \
@@ -2509,7 +2690,7 @@ command_plan() {
     (
         export COLI_MODEL="${MODEL_DIR}"
         export COLI_MODEL_MIRROR="${MIRROR_DIR}"
-        export COLI_GPU=none
+        unset COLI_CUDA COLI_GPU COLI_GPUS CUDA_DENSE CUDA_EXPERT_GB COLI_METAL
         export RAM_GB CTX PIPE_WORKERS DIRECT URING PILOT PILOT_REAL
         cd -- "${SOURCE_DIR}/c"
         ./coli plan \
@@ -2613,7 +2794,7 @@ command_profile() {
             install_service_unit
             if [[ "${no_restart}" == "0" ]] && sudo systemctl is-active --quiet "${SERVICE_NAME}"; then
                 command_plan
-                sudo systemctl restart "${SERVICE_NAME}"
+                checked_service_operation restart
             fi
             ;;
         *)
@@ -2714,7 +2895,7 @@ command_model() {
             write_config
             install_service_unit
             if sudo systemctl is-active --quiet "${SERVICE_NAME}"; then
-                sudo systemctl restart "${SERVICE_NAME}"
+                checked_service_operation restart
             fi
             info "Mirror enabled. Colibri will probe both drives at startup."
             ;;
@@ -2727,7 +2908,7 @@ command_model() {
             write_config
             install_service_unit
             if sudo systemctl is-active --quiet "${SERVICE_NAME}"; then
-                sudo systemctl restart "${SERVICE_NAME}"
+                checked_service_operation restart
             fi
             info "Mirror disabled in Colibri. No mirror files were deleted."
             [[ -z "${previous}" ]] || printf 'Preserved mirror: %s\n' "${previous}"
@@ -2944,9 +3125,10 @@ command_open_webui() {
             if model_is_ready; then
                 preflight_start
                 if [[ "${was_active}" == "1" ]]; then
-                    sudo systemctl restart "${SERVICE_NAME}"
+                    checked_service_operation restart
                 else
-                    sudo systemctl enable --now "${SERVICE_NAME}"
+                    checked_service_operation start
+                    sudo systemctl enable "${SERVICE_NAME}"
                 fi
             fi
 
@@ -3061,7 +3243,7 @@ command_ui() {
             write_config
             install_service_unit
             if sudo systemctl is-active --quiet "${SERVICE_NAME}"; then
-                sudo systemctl restart "${SERVICE_NAME}"
+                checked_service_operation restart
             fi
             command_ui show
             ;;
@@ -3135,7 +3317,7 @@ command_api_key() {
             ROTATE_API_KEY="1"
             write_config
             if sudo systemctl is-active --quiet "${SERVICE_NAME}"; then
-                sudo systemctl restart "${SERVICE_NAME}"
+                checked_service_operation restart
             fi
             info "API key rotated. Update connected clients with: ./colibri.sh api-key show"
             ;;
@@ -3184,7 +3366,7 @@ command_cli() {
     if (
         export COLI_MODEL="${MODEL_DIR}"
         export COLI_MODEL_MIRROR="${MIRROR_DIR}"
-        export COLI_GPU=none
+        unset COLI_CUDA COLI_GPU COLI_GPUS CUDA_DENSE CUDA_EXPERT_GB COLI_METAL
         export COLI_API_KEY
         export RAM_GB CTX PIPE_WORKERS DIRECT URING PILOT PILOT_REAL
         cd -- "${SOURCE_DIR}/c"
@@ -3195,8 +3377,7 @@ command_cli() {
         cli_status=$?
     fi
     if [[ "${restart_after}" == "1" ]]; then
-        sudo systemctl start "${SERVICE_NAME}" ||
-            warn "The upstream command finished, but the managed service could not be restarted."
+        checked_service_operation start
     fi
     return "${cli_status}"
 }

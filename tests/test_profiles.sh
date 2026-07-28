@@ -12,7 +12,7 @@ readonly REPOSITORY_ROOT
 source "${REPOSITORY_ROOT}/colibri.sh"
 
 logical_cpu_count() {
-    printf '32\n'
+    printf '%s\n' "${TEST_CPUS:-32}"
 }
 
 TEST_TOTAL_RAM=""
@@ -76,5 +76,31 @@ resolve_profile custom 40 8192 8
     printf 'profile test: safe custom RAM budget was rejected\n' >&2
     exit 1
 }
+
+for TEST_CPUS in 1 2 4 8 32 64; do
+    for TEST_TOTAL_RAM in 32 48 62 64 96 128; do
+        for available_percent in 80 90 100; do
+            TEST_AVAILABLE_RAM="$((TEST_TOTAL_RAM * available_percent / 100))"
+            for profile in conservative balanced performance experimental; do
+                resolve_profile "${profile}"
+                total_ceiling="$((TEST_TOTAL_RAM * 80 / 100))"
+                available_ceiling="$((TEST_AVAILABLE_RAM * 80 / 100))"
+                ((RAM_GB <= total_ceiling)) || {
+                    printf 'profile property: %s exceeded installed-RAM ceiling\n' "${profile}" >&2
+                    exit 1
+                }
+                ((RAM_GB <= available_ceiling)) || {
+                    printf 'profile property: %s exceeded available-RAM ceiling\n' "${profile}" >&2
+                    exit 1
+                }
+                ((PIPE_WORKERS >= 1 && PIPE_WORKERS <= TEST_CPUS)) || {
+                    printf 'profile property: %s selected invalid worker count\n' "${profile}" >&2
+                    exit 1
+                }
+            done
+        done
+    done
+done
+unset TEST_CPUS
 
 printf 'profile tests: passed\n'

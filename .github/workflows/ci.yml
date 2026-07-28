@@ -57,6 +57,12 @@ jobs:
       - name: Test resource profiles
         run: bash tests/test_profiles.sh
 
+      - name: Test CPU runtime configuration
+        run: tests/test_cpu_runtime.sh
+
+      - name: Test guarded service startup
+        run: tests/test_service_startup.sh
+
       - name: Test UI asset modes
         run: tests/test_ui_assets.sh
 
@@ -71,3 +77,36 @@ jobs:
 
       - name: Test mirror verification with fixtures
         run: tests/test_mirror_model.sh
+
+  upstream-contract:
+    name: Upstream CPU contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Reproduce legacy failure and validate sanitized startup
+        env:
+          COLIBRI_CONTRACT_REPETITIONS: "100"
+        run: tests/test_upstream_cpu_contract.sh
+
+  repeat-regressions:
+    name: Repeat startup regressions
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Run critical fixture tests 100 times
+        shell: bash
+        run: |
+          for ((iteration = 1; iteration <= 100; iteration++)); do
+            tests/test_cpu_runtime.sh >/dev/null
+            tests/test_service_startup.sh >/dev/null
+            bash tests/test_profiles.sh >/dev/null
+          done
+          printf 'Critical startup/profile regressions passed 100 repetitions.\n'
