@@ -518,6 +518,7 @@ resolve_profile() {
     local cpus
     local percent
     local reserve
+    local max_ram=0
 
     validate_profile_name "${requested_profile}"
     total_ram="$(total_ram_gb)"
@@ -553,6 +554,7 @@ resolve_profile() {
         performance)
             percent=80
             reserve=8
+            max_ram=44
             CTX="8192"
             PIPE_WORKERS="$(min_int "${cpus}" 12)"
             PIN_GB="14"
@@ -565,6 +567,7 @@ resolve_profile() {
         experimental)
             percent=80
             reserve=8
+            max_ram=44
             CTX="8192"
             PIPE_WORKERS="$(min_int "${cpus}" 12)"
             PIN_GB="14"
@@ -601,6 +604,9 @@ resolve_profile() {
     RAM_GB="$((total_ram * percent / 100))"
     if ((RAM_GB > total_ram - reserve)); then
         RAM_GB="$((total_ram - reserve))"
+    fi
+    if ((max_ram > 0 && RAM_GB > max_ram)); then
+        RAM_GB="${max_ram}"
     fi
     ((RAM_GB >= 16)) ||
         die "Profile '${requested_profile}' leaves too little RAM for Colibri on this host."
