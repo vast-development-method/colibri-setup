@@ -1,9 +1,9 @@
 # Open WebUI integration
 
 Colibri exposes an OpenAI-compatible API, so Open WebUI can use it as a
-provider without a protocol adapter. The recommended deployment mode is
-`open-webui`: Colibri runs the API only, and Open WebUI remains the single
-browser interface.
+provider without a protocol adapter. The default deployment uses
+`colibri-web`; `open-webui` is an explicit alternative that runs the API only
+and keeps Open WebUI as the single browser interface.
 
 The setup supports three UI modes:
 
