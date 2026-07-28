@@ -32,7 +32,7 @@ and fast storage for Colibri:
 
 ```mermaid
 flowchart TD
-    Client["Open WebUI or API client"] --> API["Colibri API :11435"]
+    Client["Colibri dashboard or API client"] --> API["Colibri API :11435"]
     API --> CPU["CPU + RAM expert cache"]
     CPU --> Primary["Primary NVMe model"]
     CPU -. "optional balanced reads" .-> Mirror["Second physical NVMe mirror"]
@@ -170,11 +170,11 @@ The first start may be quiet for several minutes while the model loads.
 
 All modes use the same model process and the same configurable port.
 
-| Mode | Command | Colibri dashboard | Intended client |
+| Mode | Selection | Colibri dashboard | Intended client |
 | --- | --- | --- | --- |
-| Open WebUI only | `./colibri.sh open-webui setup` | Disabled | Open WebUI |
-| Colibri web | `./colibri.sh ui set colibri-web` | Enabled | Colibri dashboard and API |
-| API only | `./colibri.sh ui set api-only` | Disabled | API clients or a reverse proxy |
+| Colibri web (default) | `./colibri.sh install` | Enabled | Colibri dashboard and API |
+| Open WebUI edge case | `./colibri.sh open-webui setup` | Disabled | Existing Open WebUI |
+| API-only edge case | `./colibri.sh ui set api-only` | Disabled | API clients or a reverse proxy |
 
 In `open-webui` and `api-only` modes, the toolkit runs `coli serve` and removes
 generated dashboard assets from the runtime checkout. This matters because
@@ -273,8 +273,8 @@ host can consume.
 | Profile | Use case | Resource behavior |
 | --- | --- | --- |
 | `conservative` | Shared host under load | 50% RAM target with larger reserve, 4K context, fewer workers, direct I/O off |
-| `balanced` | Recommended starting point | 70% RAM target with healthy reserve, 8K context, direct I/O on |
-| `performance` | Dedicated, monitored experiment | 80% RAM target, more workers and pinned hot storage |
+| `balanced` | Lower-pressure fallback | 70% RAM target with healthy reserve, 8K context, direct I/O on |
+| `performance` | Default deployment | 80% RAM target, more workers and pinned hot storage |
 | `experimental` | Measured io_uring/pilot testing | Performance budget plus experimental I/O and pilot features |
 | `custom` | Explicit operator budget | Requires RAM, context, and worker values |
 
@@ -297,10 +297,10 @@ CPU-only Colibri build
 COLI_GPU=none
 ```
 
-Start with `balanced`. Move upward only after checking memory pressure, swap,
-time to first token, decode rate, and NVMe service time with a repeatable
-prompt. See [Tuning](docs/TUNING.md) for a controlled benchmarking cycle and
-the quality-preserving defaults.
+The installer starts with `performance`. Move down to `balanced` or
+`conservative` if monitoring shows unacceptable memory pressure, swap, or NVMe
+service time. See [Tuning](docs/TUNING.md) for a controlled benchmarking cycle
+and the quality-preserving defaults.
 
 ## Dual-NVMe model mirror
 
