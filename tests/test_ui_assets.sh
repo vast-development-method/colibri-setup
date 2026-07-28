@@ -19,9 +19,12 @@ node_version_supports_colibri_web "v24.1.0"
 ! node_version_supports_colibri_web "v20.18.3"
 ! node_version_supports_colibri_web "v22.11.0"
 ! node_version_supports_colibri_web "not-a-version"
-
 fixture_root="$(mktemp -d)"
 trap 'rm -rf -- "${fixture_root}"' EXIT
+! any_path_exists "${fixture_root}/absent-a" "${fixture_root}/absent-b"
+touch "${fixture_root}/present"
+any_path_exists "${fixture_root}/absent" "${fixture_root}/present"
+
 SOURCE_DIR="${fixture_root}/upstream"
 mkdir -p -- "${SOURCE_DIR}/web/dist"
 printf 'fixture\n' >"${SOURCE_DIR}/web/dist/index.html"
