@@ -620,7 +620,7 @@ show_profile_values() {
     printf 'GPU:               disabled by CPU-only build\n'
 }
 
-assert_config_permissions() {
+repair_config_permissions() {
     [[ -e "${CONFIG_FILE}" ]] || return 0
     [[ ! -L "${CONFIG_FILE}" ]] || die "Refusing symlinked configuration: ${CONFIG_FILE}"
 
@@ -629,8 +629,21 @@ assert_config_permissions() {
     owner_uid="$(stat -c '%u' "${CONFIG_FILE}")"
     mode="$(stat -c '%a' "${CONFIG_FILE}")"
     [[ "${owner_uid}" == "0" ]] || die "Configuration must be owned by root: ${CONFIG_FILE}"
-    ((8#${mode} & 8#022 == 0)) ||
-        die "Configuration must not be group- or world-writable: ${CONFIG_FILE}"
+
+    if (((8#${mode} & 8#022) != 0)); then
+        warn "Repairing unsafe managed configuration permissions: ${CONFIG_FILE}"
+        sudo chmod 0640 -- "${CONFIG_FILE}"
+    fi
+}
+
+assert_config_permissions() {
+    repair_config_permissions
+    [[ -e "${CONFIG_FILE}" ]] || return 0
+
+    local mode
+    mode="$(stat -c '%a' "${CONFIG_FILE}")"
+    (((8#${mode} & 8#022) == 0)) ||
+        die "Could not secure managed configuration permissions: ${CONFIG_FILE}"
 }
 
 assert_service_owned_or_absent() {
