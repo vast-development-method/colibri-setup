@@ -139,26 +139,25 @@ When the download has completed:
 ```
 
 `model verify` uses Hugging Face's checksum verifier against the configured
-repository. It fails if a repository file is missing or if any checksum does
-not match. It does not download, replace, or delete model files. Colibri's
-runtime sidecars may be reported as extra local files, but they do not cause
-verification to fail. A checksum difference for `.coli_usage` is also treated
-as expected because Colibri updates that learning profile during normal use;
-it is never overwritten as a corrupted weight. A missing remote `.coli_usage`
-file can still be restored. While the complete model is being read, an
-elapsed-time heartbeat is printed every 10 seconds so the command does not
-appear hung.
+model repository. It reports files that are missing or checksum-broken and
+does not modify the model. `.coli_usage` is ignored because it is Colibri
+runtime state rather than an immutable model weight. While the complete model
+is read, an elapsed-time heartbeat is printed every 10 seconds.
 
-If verification identifies missing or checksum-mismatched repository files,
-repair only those files:
+If verification identifies missing or checksum-broken model files, repair
+exactly those files:
 
 ```bash
 ./colibri.sh model repair
 ```
 
-The repair command prints the exact file list, asks for confirmation, invokes
-`hf download` with only those paths and `--force-download`, and then verifies
-the complete model again. Correct model shards are not downloaded again.
+The repair command prints the complete repair list and asks for confirmation.
+It downloads only those paths into an isolated staging directory, without
+`--force-download`. After the staged download succeeds, it replaces only the
+listed broken files, verifies the complete model, and restores the originals
+automatically if that verification fails. Hugging Face may display many Xet
+transfer chunks while downloading one large shard; those chunks are not
+additional model files.
 
 In another terminal, verify discovery and run a tiny completion:
 
