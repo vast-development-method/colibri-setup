@@ -159,20 +159,18 @@ destination and manages the detached session.
 
 ### Verify an existing model
 
-Run a complete repository checksum verification after a download, after
-moving the model, or whenever storage integrity is in doubt:
+Run a complete checksum check after a download, after moving the model, or
+when storage integrity is in doubt:
 
 ```bash
 ./colibri.sh model verify
 ```
 
-This invokes Hugging Face's native `hf cache verify` against the configured
-repository and model directory. Missing repository files and checksum
-mismatches return a non-zero exit status. The operation is read-only and does
-not download, repair, or delete anything. Because it reads the complete model,
-the approximately 372 GB default model may take several minutes to verify on
-NVMe storage. The manager prints an immediate start message and an elapsed-time
-heartbeat every 10 seconds until Hugging Face returns its result.
+This invokes Hugging Face's checksum verifier against the configured model
+repository. The operation is read-only and reports missing or checksum-broken
+files without modifying the model. `.coli_usage` is excluded because Colibri
+owns that mutable runtime file. The manager prints an elapsed-time heartbeat
+every 10 seconds while the model is read.
 
 To verify a different repository and local directory without changing the
 deployment configuration:
@@ -182,39 +180,34 @@ deployment configuration:
 ```
 
 Extra local files are warnings only. This is intentional because Colibri
-stores KV data and other runtime sidecars beside the model. The default remote
-repository also contains a seed `.coli_usage` file, but Colibri updates that
-learning profile after each turn. A later `.coli_usage` checksum difference is
-therefore reported as an expected mutable-state warning and is not selected
-for repair. If `.coli_usage` is absent entirely, repair may restore the remote
-seed file.
+stores KV data and other runtime sidecars beside the model.
 
-### Repair only failed model files
+### Repair only missing or corrupt model files
 
-When verification reports missing files or checksum mismatches, run:
+When verification reports missing files or checksum failures, run:
 
 ```bash
 ./colibri.sh model repair
 ```
 
-The command:
+The command extracts the exact missing/corrupt path list, prints it, and asks
+for confirmation. It downloads only those paths into a separate staging
+directory without `--force-download`. It then replaces only the listed files,
+reruns the full checksum verification, and restores every original file if the
+check fails. Existing files that passed verification are never touched.
 
-1. performs the same complete checksum scan with visible heartbeat output;
-2. extracts only paths listed by Hugging Face under checksum failures or
-   missing remote files;
-3. prints those paths and asks for confirmation;
-4. downloads only those paths with `--force-download`;
-5. performs a second complete verification.
+One large Hugging Face file can be transferred as many Xet chunks. A long
+chunk list does not mean additional model files are being downloaded; the
+repair scope is exactly the file list printed before confirmation.
 
-Existing valid shards are not downloaded again. For unattended use after
-reviewing the printed plan:
+For unattended use after reviewing the printed plan:
 
 ```bash
 ./colibri.sh model repair --yes
 ```
 
-Stop Colibri before repair. The command refuses to replace model files while
-the managed service is active.
+Stop Colibri before repair. The command refuses to write model files while the
+managed service is active.
 
 ## Primary model and dual-NVMe mirror
 
