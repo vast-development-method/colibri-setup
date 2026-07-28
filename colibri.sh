@@ -1303,6 +1303,9 @@ download_model_repair_files() {
     info "Downloading the exact repair list into an isolated staging directory"
     printf 'Hugging Face may display many transfer chunks for one large file; the file list above is the complete repair scope.\n'
     if ! HF_HUB_DISABLE_TELEMETRY=1 \
+        HF_HOME="${repair_stage}/.hf-home" \
+        HF_HUB_CACHE="${repair_stage}/.hf-home/hub" \
+        HF_XET_CACHE="${repair_stage}/.hf-home/xet" \
         "${HF_VENV_DIR}/bin/hf" download \
             "${repository}" \
             "${repair_files[@]}" \
@@ -1352,6 +1355,10 @@ validate_staged_model_repair() {
         error "Could not create the hard-linked model verification view."
         return 1
     fi
+    # Never expose the live model's downloader metadata to the verifier through
+    # hard links. Any verifier metadata must remain isolated in this disposable
+    # prospective-model view.
+    rm -rf --one-file-system -- "${verification_view}/.cache"
 
     for repair_record in "${repair_records[@]}"; do
         repair_file="$(model_repair_record_path "${repair_record}")"
