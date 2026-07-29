@@ -71,12 +71,12 @@ grep -Fq 'Model weights are NEVER deleted.' <<<"${help_output}" || {
     exit 1
 }
 
-grep -Fq 'model verify [REPO] [DEST]' <<<"${help_output}" || {
+grep -Fq 'model verify [REPO] [DEST] [--revision REVISION]' <<<"${help_output}" || {
     printf 'smoke: help does not document model checksum verification\n' >&2
     exit 1
 }
 
-grep -Fq 'model repair [REPO] [DEST] [--yes]' <<<"${help_output}" || {
+grep -Fq 'model repair [REPO] [DEST] [--revision REVISION] [--yes]' <<<"${help_output}" || {
     printf 'smoke: help does not document selective model repair\n' >&2
     exit 1
 }
@@ -141,6 +141,12 @@ grep -Fq 'HF_TOKEN' <<<"${download_help}" || {
 
 grep -Fq 'screen' <<<"${download_help}" || {
     printf 'smoke: download help does not explain GNU Screen\n' >&2
+    exit 1
+}
+
+grep -Fq '5276684ba30ac0026c07220d3f389171a84eb074' \
+    <<<"${download_help}" || {
+    printf 'smoke: download help does not report the immutable model revision\n' >&2
     exit 1
 }
 

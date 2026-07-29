@@ -10,7 +10,8 @@ PROGRAM_NAME="${0##*/}"
 SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
 
 DEFAULT_MODEL="mastouri/GLM-5.2-colibri-int4-g64-with-int8-mtp"
-DEFAULT_EXPECTED_SIZE_GB=380
+DEFAULT_REVISION="5276684ba30ac0026c07220d3f389171a84eb074"
+DEFAULT_EXPECTED_SIZE_GB=430
 DEFAULT_MAX_WORKERS=2
 DEFAULT_ETAG_TIMEOUT=60
 DEFAULT_DOWNLOAD_TIMEOUT=600
@@ -94,6 +95,25 @@ state_get() {
         fi
     done < "$state_file"
     return 1
+}
+
+state_model_revision() {
+    local state_file="$1"
+    local revision
+    local model
+
+    revision="$(state_get "$state_file" revision || true)"
+    if [[ -n "$revision" ]]; then
+        printf '%s' "$revision"
+        return 0
+    fi
+
+    model="$(state_get "$state_file" model)"
+    if [[ "$model" == "$DEFAULT_MODEL" ]]; then
+        printf '%s' "$DEFAULT_REVISION"
+    else
+        printf 'main'
+    fi
 }
 
 acquire_state_lock() {
@@ -279,8 +299,9 @@ prepare_token() {
 
 confirm_download() {
     local model="$1"
-    local destination="$2"
-    local assume_yes="$3"
+    local revision="$2"
+    local destination="$3"
+    local assume_yes="$4"
     local answer
 
     ((assume_yes == 1)) && return 0
@@ -288,6 +309,7 @@ confirm_download() {
         die "Interactive confirmation is unavailable. Re-run with --yes after reviewing the destination."
 
     printf '\nModel:       %s\n' "$model"
+    printf 'Revision:    %s\n' "$revision"
     printf 'Destination: %s\n' "$destination"
     IFS= read -r -p 'Start this download? [y/N] ' answer
     [[ "$answer" =~ ^[Yy]([Ee][Ss])?$ ]] || {
@@ -437,6 +459,7 @@ start_screen_worker() {
 
 start_command() {
     local model="$DEFAULT_MODEL"
+    local revision="$DEFAULT_REVISION"
     local folder=''
     local local_dir=''
     local models_dir="$MODELS_DIR"
@@ -455,6 +478,7 @@ start_command() {
     local prompt_for_token=1
     local model_set=0
     local folder_set=0
+    local revision_set=0
     local destination job_id session state_file destination_hash lock_dir existing_state existing_status
 
     while (($#)); do
@@ -462,6 +486,12 @@ start_command() {
             --local-dir)
                 (($# >= 2)) || die "--local-dir requires a path."
                 local_dir="$2"
+                shift 2
+                ;;
+            --revision)
+                (($# >= 2)) || die "--revision requires a value."
+                revision="$2"
+                revision_set=1
                 shift 2
                 ;;
             --models-dir)
@@ -577,6 +607,14 @@ start_command() {
 
     [[ "$model" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]] ||
         die "Model must be a Hugging Face repository in owner/name form."
+    if ((revision_set == 0)) && [[ "$model" != "$DEFAULT_MODEL" ]]; then
+        revision="main"
+    fi
+    [[ "$revision" =~ ^[A-Za-z0-9._/-]+$ ]] ||
+        die "Revision contains unsupported characters."
+    case "/${revision}/" in
+        */../* | */./*) die "Revision contains an unsafe path segment." ;;
+    esac
     if ((folder_set == 1)) && [[ "$folder" == */* ]]; then
         [[ -z "$local_dir" ]] ||
             die "A destination path and --local-dir cannot both be supplied."
@@ -642,7 +680,7 @@ start_command() {
     fi
 
     check_free_space "$destination" "$expected_size_gb" "$min_free_gb"
-    confirm_download "$model" "$destination" "$assume_yes"
+    confirm_download "$model" "$revision" "$destination" "$assume_yes"
     validate_token_file "$token_file"
     prepare_token "$token_file" "$prompt_for_token"
 
@@ -657,6 +695,7 @@ start_command() {
     state_update "$state_file" \
         "job_id=${job_id}" \
         "model=${model}" \
+        "revision=${revision}" \
         "destination=${destination}" \
         "session=${session}" \
         "status=queued" \
@@ -745,13 +784,14 @@ worker_interrupted() {
 
 worker_command() {
     local state_file="${1:-}"
-    local model destination hf_binary token_file max_workers etag_timeout download_timeout
+    local model revision destination hf_binary token_file max_workers etag_timeout download_timeout
     local max_retries retry_base retry_max log_file attempt_log attempt rc delay validation_error
 
     [[ -n "$state_file" && -f "$state_file" ]] || die "Worker state file is missing."
     trap 'worker_interrupted "$state_file"' INT TERM HUP
 
     model="$(state_get "$state_file" model)"
+    revision="$(state_model_revision "$state_file")"
     destination="$(state_get "$state_file" destination)"
     hf_binary="$(state_get "$state_file" hf_bin)"
     token_file="$(state_get "$state_file" token_file || true)"
@@ -793,6 +833,7 @@ worker_command() {
         set +e
         "$hf_binary" download "$model" \
             --repo-type model \
+            --revision "$revision" \
             --local-dir "$destination" \
             --max-workers "$max_workers" 2>&1 |
             sanitize_stream |
@@ -873,6 +914,7 @@ show_one_status() {
     printf 'Status:      %s\n' "$status"
     printf 'Worker:      %s\n' "$running"
     printf 'Model:       %s\n' "$(state_get "$state_file" model)"
+    printf 'Revision:    %s\n' "$(state_model_revision "$state_file")"
     printf 'Destination: %s\n' "$(state_get "$state_file" destination)"
     printf 'Attempt:     %s\n' "$(state_get "$state_file" attempt)"
     printf 'Updated:     %s\n' "$(state_get "$state_file" updated_at)"
@@ -1014,10 +1056,12 @@ Start a resumable Hugging Face model download in a detached GNU Screen session.
 
 Defaults:
   Model:         ${DEFAULT_MODEL}
+  Revision:      ${DEFAULT_REVISION}
   Expected size: approximately ${DEFAULT_EXPECTED_SIZE_GB} GB
   Models dir:    ${MODELS_DIR}
 
 Options:
+  --revision REVISION      Immutable model revision (default model is pinned)
   --local-dir DIR          Exact destination (instead of models-dir/folder)
   --models-dir DIR         Parent model directory
   --folder NAME            Destination folder below models-dir

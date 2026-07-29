@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 
 readonly UPSTREAM_URL="https://github.com/JustVugg/colibri.git"
-readonly UPSTREAM_COMMIT="81f08a09e5651ce52616dc720f68810f9021c0be"
+readonly UPSTREAM_COMMIT="2d623816eecbf740b1fc06eb422974bda0af8931"
 readonly REPETITIONS="${COLIBRI_CONTRACT_REPETITIONS:-20}"
 
 fail() {
@@ -29,7 +29,7 @@ else
 fi
 
 [[ "$(git -C "${upstream_dir}" rev-parse HEAD)" == "${UPSTREAM_COMMIT}" ]] ||
-    fail "upstream checkout is not the pinned v1.1.1 commit"
+    fail "upstream checkout is not the pinned v1.2.0 commit"
 
 (
     cd -- "${upstream_dir}/c"

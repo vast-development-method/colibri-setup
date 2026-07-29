@@ -108,5 +108,6 @@ jobs:
             tests/test_cpu_runtime.sh >/dev/null
             tests/test_service_startup.sh >/dev/null
             bash tests/test_profiles.sh >/dev/null
+            bash tests/test_model_verify.sh >/dev/null
           done
-          printf 'Critical startup/profile regressions passed 100 repetitions.\n'
+          printf 'Critical startup/profile/model regressions passed 100 repetitions.\n'

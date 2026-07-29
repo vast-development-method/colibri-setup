@@ -31,7 +31,7 @@ DEPLOY_GROUP="$(id -gn)"
 MODEL_REPO="test/model"
 MODEL_ID="test-model"
 MIRROR_DIR=""
-UPSTREAM_REF="v1.1.1"
+UPSTREAM_REF="v1.2.0"
 SOURCE_CREATED="1"
 BIND_HOST="127.0.0.1"
 PORT="11435"
@@ -63,6 +63,10 @@ if grep -Eq \
 fi
 grep -Fxq 'COLI_POLICY=quality' <<<"${config_output}" ||
     fail "rendered configuration lost the quality policy"
+grep -Fxq \
+    'MODEL_REVISION=5276684ba30ac0026c07220d3f389171a84eb074' \
+    <<<"${config_output}" ||
+    fail "rendered configuration lost the immutable model revision"
 printf '%s\n' "${config_output}" >"${fixture_root}/clean.env"
 ! config_file_has_gpu_backend_settings "${fixture_root}/clean.env" ||
     fail "clean configuration was classified as GPU-enabled"
@@ -85,6 +89,8 @@ for mode in api-only open-webui colibri-web; do
         fail "${mode} unit is missing its restart interval"
     grep -Fqx 'StartLimitBurst=3' "${unit_file}" ||
         fail "${mode} unit is missing its restart burst limit"
+    ! grep -Fq 'RequiresMountsFor=' "${unit_file}" ||
+        fail "${mode} unit still blocks Colibri behind a wrapper model-mount preflight"
     if grep -Eq '^Environment=(COLI_CUDA|COLI_GPU|COLI_GPUS|CUDA_DENSE|CUDA_EXPERT_GB|COLI_METAL)=' \
         "${unit_file}"; then
         fail "${mode} unit adds a GPU backend setting"
