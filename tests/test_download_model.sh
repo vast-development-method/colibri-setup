@@ -4,6 +4,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT="${ROOT_DIR}/scripts/download_model.sh"
+DEFAULT_MODEL_UNDER_TEST="mastouri/GLM-5.2-colibri-int4-g64-with-int8-mtp"
+DEFAULT_REVISION_UNDER_TEST="5276684ba30ac0026c07220d3f389171a84eb074"
 TEST_ROOT="$(mktemp -d)"
 BIN_DIR="${TEST_ROOT}/bin"
 export MOCK_ROOT="${TEST_ROOT}/mock"
@@ -159,12 +161,17 @@ start_job() {
 
 printf '1. start, validation, status, attach, and token secrecy\n'
 export HF_TOKEN='hf_testsecretmustnotleak'
-output="$(start_job 'test/model-success' "${TEST_ROOT}/direct-success")"
+output="$(start_job "${DEFAULT_MODEL_UNDER_TEST}" "${TEST_ROOT}/direct-success")"
 job="$(awk '/^Job: / {print $2}' <<< "$output")"
 [[ -n "$job" ]] || fail "Start did not print a job ID"
 wait_for_status "$job" complete
 status_output="$("$SCRIPT" status "$job")"
 assert_contains "$status_output" 'Download completed and required model files were validated.'
+assert_contains "$status_output" "Revision:    ${DEFAULT_REVISION_UNDER_TEST}"
+grep -Fxq -- '--revision' "${MOCK_ROOT}/hf.args" ||
+    fail "Pinned download did not pass --revision to Hugging Face"
+grep -Fxq "${DEFAULT_REVISION_UNDER_TEST}" "${MOCK_ROOT}/hf.args" ||
+    fail "Pinned download did not use the expected immutable revision"
 attach_output="$("$SCRIPT" attach "$job" 2>&1 || true)"
 assert_contains "$attach_output" 'not running'
 grep -R -F "$HF_TOKEN" "$COLIBRI_DOWNLOAD_STATE_DIR" "$MOCK_ROOT/hf.args" >/dev/null 2>&1 &&

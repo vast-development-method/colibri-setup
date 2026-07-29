@@ -50,11 +50,18 @@ Follow service logs until interrupted:
 The first start can remain quiet for several minutes while the model loads.
 Before reporting success, the wrapper checks that the process remains active
 and has not automatically restarted during an initial five-second guard.
-This catches configuration and engine-contract failures without waiting for
-the several-minute model load or `/health`. The systemd unit permits only
+This catches immediate process and engine-contract failures without waiting
+for the several-minute model load or `/health`; it is not model verification.
+The systemd unit permits only
 three restart attempts within five minutes, preventing an invalid
 configuration from looping forever. Use `status`, `logs --follow`, and `test`
 to follow normal loading after the early guard passes.
+
+`install`, `start`, `restart`, `enable`, profile changes, and UI setup never
+contact Hugging Face, checksum the model, inspect its shard layout, or call
+`doctor`/`plan`. They pass the configured directory to Colibri. Colibri is the
+authority on whether it can load that directory; review its answer in the
+service log.
 
 ## Installation and reconfiguration
 
@@ -67,12 +74,14 @@ making changes:
 ./colibri.sh install
 ```
 
-The defaults are port `11435`, the `performance` profile, and the
-`colibri-web` dashboard.
+The defaults are port `11435`, the `performance` profile, the `colibri-web`
+dashboard, Colibri v1.2.0, and immutable model revision
+`5276684ba30ac0026c07220d3f389171a84eb074`.
 
 If the model is absent, installation offers to start the resumable download.
-Hugging Face token management and the optional second-NVMe mirror remain
-separate, explicit operations.
+If the model directory exists, installation does not inspect it and starts
+Colibri normally. Hugging Face token management, model verification/repair,
+and the optional second-NVMe mirror remain separate, explicit operations.
 
 Run it again safely to repair or update an existing installation:
 
@@ -93,8 +102,9 @@ Change operational choices without manually editing the systemd unit:
 ./colibri.sh configure --port 11435 --profile balanced
 ```
 
-Configuration automatically restarts an active service after validation. A
-stopped service remains stopped.
+Configuration automatically restarts an active service after runtime
+configuration checks. It does not validate the model. A stopped service
+remains stopped.
 
 The setup must never print secret values as part of normal status or log
 output. API-key management is intentionally separated:
@@ -116,9 +126,11 @@ The helper:
 
 1. checks or installs the `hf` CLI and GNU Screen;
 2. asks for the Hugging Face model repository and destination;
-3. requires and exports `HF_TOKEN` from the private user `.env` file;
-4. launches a resumable download in a detached Screen session;
-5. prints the session name and exact commands used to inspect it.
+3. pins the default model to revision
+   `5276684ba30ac0026c07220d3f389171a84eb074`;
+4. requires and exports `HF_TOKEN` from the private user `.env` file;
+5. launches a resumable download in a detached Screen session;
+6. prints the session name, revision, and exact commands used to inspect it.
 
 A read-only Hugging Face token is required for every managed remote `hf`
 operation. It raises authenticated rate limits and grants access to gated or
@@ -150,13 +162,15 @@ To inspect downloads:
 ```
 
 Detach from an attached Screen session with `Ctrl-A`, then `D`. The download
-continues after SSH disconnects. Re-running the download is safe: the
-Hugging Face CLI resumes from the destination's existing cache and files.
+continues after SSH disconnects. Resume a stopped or failed managed job with
+`./colibri.sh model resume`; the Hugging Face CLI retains partial files and
+continues against the revision stored in that job.
 
 For direct, non-interactive use of the reusable helper:
 
 ```bash
-scripts/download_model.sh start MODEL_REPOSITORY MODEL_DESTINATION
+scripts/download_model.sh start MODEL_REPOSITORY MODEL_DESTINATION \
+    --revision MODEL_REVISION
 scripts/download_model.sh status
 scripts/download_model.sh attach JOB
 scripts/download_model.sh cancel JOB
@@ -175,17 +189,20 @@ when storage integrity is in doubt:
 ./colibri.sh model verify
 ```
 
-This invokes Hugging Face's checksum verifier against the configured model
-repository. The operation is read-only and reports missing or checksum-broken
-files without modifying the model. `.coli_usage` is excluded because Colibri
-owns that mutable runtime file. The manager prints an elapsed-time heartbeat
-every 10 seconds while the model is read.
+This invokes Hugging Face's checksum verifier against the configured immutable
+model revision, never the repository's moving `main` branch. The operation is
+read-only and reports missing or checksum-broken AI-model runtime artifacts
+without modifying the model. Model cards, repository metadata, downloader
+metadata, `.coli_usage`, and KV/runtime sidecars are excluded from the
+integrity decision. The manager prints an elapsed-time heartbeat every 10
+seconds while the model is read.
 
 To verify a different repository and local directory without changing the
 deployment configuration:
 
 ```bash
-./colibri.sh model verify OWNER/REPOSITORY /absolute/model/directory
+./colibri.sh model verify OWNER/REPOSITORY /absolute/model/directory \
+    --revision REVISION
 ```
 
 Extra local files are warnings only. This is intentional because Colibri
@@ -199,11 +216,13 @@ When verification reports missing files or checksum failures, run:
 ./colibri.sh model repair
 ```
 
-The command extracts the exact missing/corrupt path list, prints it, and asks
-for confirmation. It downloads only those paths into a separate staging
-directory without `--force-download`. It then replaces only the listed files,
-reruns the full checksum verification, and restores every original file if the
-check fails. Existing files that passed verification are never touched.
+The command extracts the exact missing/corrupt runtime-artifact list from the
+same pinned revision, prints it, and asks for confirmation. It downloads only
+those paths into a separate staging directory without `--force-download`. It
+then replaces only the listed files, reruns checksum verification against the
+same revision, and restores every original file if the check fails. Existing
+files that passed verification are never touched. Documentation, downloader
+metadata, `.coli_usage`, and KV sidecars are never repair targets.
 
 One large Hugging Face file can be transferred as many Xet chunks. A long
 chunk list does not mean additional model files are being downloaded; the

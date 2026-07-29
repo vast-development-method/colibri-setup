@@ -8,10 +8,12 @@ This toolkit turns Colibri into an operator-friendly service:
 
 - builds a CPU-native Colibri binary, rejects CUDA/ROCm linkage, and removes
   inherited GPU backend selectors from the managed runtime;
-- pins the default installation to upstream **Colibri v1.1.1**;
+- pins the default installation to upstream **Colibri v1.2.0**;
 - uses the ready-to-run
   [`mastouri/GLM-5.2-colibri-int4-g64-with-int8-mtp`](https://huggingface.co/mastouri/GLM-5.2-colibri-int4-g64-with-int8-mtp)
-  `gs64` model by default—no conversion step is required;
+  `gs64` model by default—no conversion step is required—and pins every
+  managed Hub operation to immutable model revision
+  `5276684ba30ac0026c07220d3f389171a84eb074`;
 - downloads hundreds of gigabytes resumably in a detached GNU Screen session;
 - calculates conservative through experimental resource profiles from the
   current host, enforces an 80% RAM ceiling, and refreshes stopped-service
@@ -21,6 +23,9 @@ This toolkit turns Colibri into an operator-friendly service:
 - offers Open WebUI-only, Colibri dashboard, and API-only modes;
 - manages lifecycle, diagnostics, logs, credentials, upgrades, and the full
   upstream `coli` CLI through one entry point;
+- starts by handing the configured model directory directly to Colibri;
+  checksum verification and repair are explicit operator commands and never
+  part of install, start, restart, enable, profile changes, or UI setup;
 - verifies that start/restart survives early engine initialization and limits
   deterministic systemd restart storms;
 - always preserves model weights during stop and uninstall operations.
@@ -52,7 +57,7 @@ is missing or invalid.
 
 - Ubuntu or Debian with `systemd` and `apt-get`;
 - a non-root deployment account with `sudo`;
-- approximately 380 GB of free space for the recommended model, plus working
+- approximately 430 GB of free space for the recommended model, plus working
   space and a safety reserve;
 - at least approximately 16 GiB RAM; 24 GiB or more and fast NVMe storage are
   strongly recommended by upstream;
@@ -88,9 +93,12 @@ port `11435`:
 
 The installer shows every resolved path and resource value before asking for
 confirmation. It clones and builds the pinned upstream release, creates the
-service, generates an API key, and—if the model is absent—offers to start the
-approximately 372 GB download in GNU Screen. The service remains disabled
-until a complete model is available.
+service, and generates an API key. If the configured model directory already
+exists, the installer starts Colibri immediately without contacting Hugging
+Face, reading every model file, checking a model layout, or running `doctor`
+or `plan`. Colibri receives the directory and performs its own normal startup.
+If the directory is absent, the installer offers to start the approximately
+430 GB download in GNU Screen and leaves the service stopped while it runs.
 
 A read-only Hugging Face token is required for every managed command that
 contacts the Hugging Face Hub. Authenticated downloads receive better rate
@@ -129,21 +137,27 @@ Monitor or attach to the detached download:
 Detach without stopping the download with `Ctrl-A`, then `D`. Interrupted
 downloads retry with backoff and can be resumed without starting from zero.
 
-When the download has completed:
+When the download has completed, start Colibri:
 
 ```bash
-./colibri.sh model verify
-./colibri.sh doctor
-./colibri.sh plan
 ./colibri.sh start
 ./colibri.sh logs --follow
 ```
 
-`model verify` uses Hugging Face's checksum verifier against the configured
-model repository. It reports files that are missing or checksum-broken and
-does not modify the model. `.coli_usage` is ignored because it is Colibri
-runtime state rather than an immutable model weight. While the complete model
-is read, an elapsed-time heartbeat is printed every 10 seconds.
+No lifecycle command performs a model checksum scan. Run verification only
+when you deliberately want the roughly ten-minute full read:
+
+```bash
+./colibri.sh model verify
+```
+
+`model verify` uses Hugging Face's checksum verifier against the pinned model
+revision, not the moving `main` branch. It reports runtime artifacts that are
+missing or checksum-broken and does not modify the model. Differences in
+`README.md`, `.gitattributes`, downloader metadata, `.coli_usage`, KV files,
+and other non-model or mutable runtime files do not invalidate the AI model.
+While the complete model is read, an elapsed-time heartbeat is printed every
+10 seconds.
 
 If verification identifies missing or checksum-broken model files, repair
 exactly those files:
@@ -152,13 +166,43 @@ exactly those files:
 ./colibri.sh model repair
 ```
 
-The repair command prints the complete repair list and asks for confirmation.
-It downloads only those paths into an isolated staging directory, without
-`--force-download`. After the staged download succeeds, it replaces only the
-listed broken files, verifies the complete model, and restores the originals
-automatically if that verification fails. Hugging Face may display many Xet
-transfer chunks while downloading one large shard; those chunks are not
-additional model files.
+The repair command uses the same immutable revision, prints the complete
+runtime-artifact repair list, and asks for confirmation. It downloads only
+those paths into an isolated staging directory, without `--force-download`.
+After the staged download succeeds, it replaces only the listed broken files,
+verifies the prospective and completed repair against that revision, and
+restores the originals automatically if verification fails. It never repairs
+the model card, downloader metadata, `.coli_usage`, or KV sidecars. Hugging
+Face may display many Xet transfer chunks while downloading one large shard;
+those chunks are not additional model files.
+
+### Pinned AI-model snapshot
+
+The default snapshot is:
+
+```text
+Repository: mastouri/GLM-5.2-colibri-int4-g64-with-int8-mtp
+Revision:   5276684ba30ac0026c07220d3f389171a84eb074
+Payload:    429,276,080,522 bytes (about 399.8 GiB) across 143 Xet files
+```
+
+This is the snapshot identified by the model card Git object
+`77311a8495cbd5984b60d48dd84d7070fb573660`. The model payload was complete
+by the earlier upload commit `a714be47dca8de54e6b29f9d39123e1ce703dcab`;
+between that upload and the pinned revision, and between the pinned revision
+and the repository state reviewed on 29 July 2026, only `README.md` changed.
+The runtime weights, MTP shard, configuration, and tokenizer did not change.
+
+Files under `.cache/huggingface/download/` such as `*.metadata`, `*.lock`, and
+`*.incomplete` are downloader bookkeeping, not model artifacts. Their presence
+can produce hundreds of “extra files” in a repository-wide comparison. Explicit
+verification therefore ignores them; it does not delete or otherwise modify
+them.
+
+The configured pin is shown by `./colibri.sh status` and stored as
+`MODEL_REVISION` in the managed configuration. Set another revision
+deliberately with `--model-revision REVISION`; changing it is not part of a
+normal install or start.
 
 In another terminal, verify discovery and run a tiny completion:
 
@@ -479,5 +523,6 @@ with or endorsed by the Colibri authors, Hugging Face, the model publisher,
 or Open WebUI.
 
 Review upstream release notes and model licensing before deployment. The
-default pin is intentionally stable; upstream code changes only when
-`./colibri.sh upgrade` is explicitly requested.
+default pins are intentionally stable: Colibri code changes only when
+`./colibri.sh upgrade` is explicitly requested, and managed model operations
+remain on `MODEL_REVISION` until the operator deliberately changes it.
